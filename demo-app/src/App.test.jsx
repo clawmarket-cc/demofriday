@@ -249,6 +249,78 @@ describe('App chat flow', () => {
     )
   })
 
+  it('keeps uploaded files downloadable after switching between agent screens', async () => {
+    const user = userEvent.setup()
+
+    uploadFiles.mockResolvedValue({
+      uploaded: [
+        {
+          id: 'upload-1',
+          name: 'brief.xlsx',
+          size: 14,
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          downloadUrl: '/files/upload-1',
+        },
+      ],
+    })
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed',
+          hasUploads: true,
+        }),
+        messages: [
+          { role: 'user', text: 'Analyze this workbook', timestamp: '2026-03-05T12:00:00.000Z' },
+          { role: 'assistant', text: 'Workbook parsed.', timestamp: '2026-03-05T12:00:01.000Z' },
+        ],
+      }),
+    )
+
+    const { container } = render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    const fileInput = container.querySelector('input[type="file"]')
+    const workbook = new File(['a,b\n1,2'], 'brief.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+
+    await user.upload(fileInput, workbook)
+    await user.type(getComposerInput(), 'Analyze this workbook')
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => {
+      expect(uploadFiles).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: 'Excel Analyst',
+          files: [workbook],
+        }),
+      )
+    })
+
+    expect(await screen.findByText('brief.xlsx')).toBeInTheDocument()
+
+    const hasUploadDownloadLink = (await screen.findAllByRole('link', { name: 'Download' })).some(
+      (link) => /\/files\/upload-1$/.test(link.getAttribute('href') ?? ''),
+    )
+
+    expect(hasUploadDownloadLink).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: /PDF Agent/i }))
+    await user.click(screen.getByRole('button', { name: /Excel Analyst/i }))
+
+    expect(await screen.findByText('brief.xlsx')).toBeInTheDocument()
+
+    const hasUploadDownloadLinkAfterSwitch = (
+      await screen.findAllByRole('link', { name: 'Download' })
+    ).some((link) => /\/files\/upload-1$/.test(link.getAttribute('href') ?? ''))
+
+    expect(hasUploadDownloadLinkAfterSwitch).toBe(true)
+  })
+
   it('keeps the optimistic user message when the backend returns only a generated file', async () => {
     const user = userEvent.setup()
 

@@ -25,6 +25,7 @@ import { isAwaitingVisibleAgentResult } from './utils/chatFlow'
 
 const STORAGE_CLIENT_ID_KEY = 'golemforce-chat-client-id'
 const STORAGE_CONVERSATION_IDS_KEY = 'golemforce-chat-conversation-ids'
+const STORAGE_RUNTIME_CONVERSATIONS_KEY = 'golemforce-chat-runtime-conversations'
 const RUNTIME_CONVERSATIONS_CACHE_KEY = '__golemforce-chat-runtime-conversations'
 const DEFAULT_THREAD_ID = 'main'
 
@@ -45,6 +46,20 @@ const readRuntimeConversations = () => {
     return null
   }
 
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_RUNTIME_CONVERSATIONS_KEY)
+
+    if (raw) {
+      const parsed = JSON.parse(raw)
+
+      if (parsed && typeof parsed === 'object') {
+        return parsed
+      }
+    }
+  } catch {
+    // Ignore sessionStorage failures and fall back to in-memory cache.
+  }
+
   const cached = window[RUNTIME_CONVERSATIONS_CACHE_KEY]
 
   if (!cached || typeof cached !== 'object') {
@@ -57,6 +72,15 @@ const readRuntimeConversations = () => {
 const persistRuntimeConversations = (conversations) => {
   if (typeof window === 'undefined') {
     return
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      STORAGE_RUNTIME_CONVERSATIONS_KEY,
+      JSON.stringify(conversations),
+    )
+  } catch {
+    // Ignore sessionStorage persistence failures and keep the in-memory cache.
   }
 
   window[RUNTIME_CONVERSATIONS_CACHE_KEY] = conversations
@@ -294,6 +318,55 @@ const attachArtifactsToLatestAssistant = (messages, artifacts) => {
   return nextMessages
 }
 
+const attachUploadedFileToUserMessage = (messages, messageId, uploadedFile) =>
+  messages.map((message) =>
+    message.id === messageId
+      ? {
+          ...message,
+          file: toUiFile(uploadedFile),
+        }
+      : message,
+  )
+
+const attachLatestUserFileFromFallback = (messages, fallbackMessages) => {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return messages
+  }
+
+  if (!Array.isArray(fallbackMessages) || fallbackMessages.length === 0) {
+    return messages
+  }
+
+  const fallbackUserWithFile = [...fallbackMessages]
+    .reverse()
+    .find((message) => message?.role === 'user' && message.file)
+
+  if (!fallbackUserWithFile) {
+    return messages
+  }
+
+  let latestUserIndex = -1
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') {
+      latestUserIndex = index
+      break
+    }
+  }
+
+  if (latestUserIndex === -1 || messages[latestUserIndex]?.file) {
+    return messages
+  }
+
+  const nextMessages = [...messages]
+  nextMessages[latestUserIndex] = {
+    ...nextMessages[latestUserIndex],
+    file: toUiFile(fallbackUserWithFile.file),
+  }
+
+  return nextMessages
+}
+
 const buildConversationFromPayload = (agentId, payload, fallbackMessages = []) => {
   const normalizedMessages = normalizeBackendMessages(payload).map((message, index) =>
     toUiMessage({
@@ -305,19 +378,20 @@ const buildConversationFromPayload = (agentId, payload, fallbackMessages = []) =
     }),
   )
   const messages = normalizedMessages.length > 0 ? normalizedMessages : [...fallbackMessages]
+  const messagesWithUserFiles = attachLatestUserFileFromFallback(messages, fallbackMessages)
   const artifacts = extractNewArtifacts(payload)
-  const withArtifacts = attachArtifactsToLatestAssistant(messages, artifacts)
+  const withArtifacts = attachArtifactsToLatestAssistant(messagesWithUserFiles, artifacts)
 
   if (withArtifacts) {
     return withArtifacts
   }
 
   if (artifacts.length === 0) {
-    return messages
+    return messagesWithUserFiles
   }
 
   return [
-    ...messages,
+    ...messagesWithUserFiles,
     toUiMessage({
       agentId,
       role: 'assistant',
@@ -742,7 +816,19 @@ export default function App() {
           files: [file],
         })
 
-        fileIds = (uploadResponse.uploaded ?? []).map((uploadedFile) => uploadedFile.id).filter(Boolean)
+        const uploadedFiles = Array.isArray(uploadResponse.uploaded) ? uploadResponse.uploaded : []
+        fileIds = uploadedFiles.map((uploadedFile) => uploadedFile.id).filter(Boolean)
+
+        if (uploadedFiles[0] && isCurrentConversation()) {
+          setConversations((prev) => ({
+            ...prev,
+            [agentId]: attachUploadedFileToUserMessage(
+              prev[agentId] ?? [],
+              userMessage.id,
+              uploadedFiles[0],
+            ),
+          }))
+        }
 
         if (fileIds.length === 0) {
           throw new Error(DEFAULT_UPLOAD_ERROR)

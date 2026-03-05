@@ -162,7 +162,13 @@ export default function MessageBubble({ message, agent, locale = 'en-US', text =
         <div className="message-stack">
           <div className="message-bubble user-bubble">
             {hasText && <span>{message.text}</span>}
-            {hasAttachment && <Attachment file={message.file} />}
+            {hasAttachment && (
+              <Attachment
+                file={message.file}
+                actionLabel={copy.downloadArtifactLabel}
+                metaLabel={copy.generatedFileLabel}
+              />
+            )}
           </div>
           <p className="message-time align-end">{time}</p>
         </div>
