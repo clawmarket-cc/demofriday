@@ -32,6 +32,7 @@ const defaultChatText = {
   uploadingStatus: 'Uploading file',
   dispatchingStatus: 'Starting request',
   runningStatus: 'Waiting for agent output',
+  runningStatusCycle: ['Waiting for agent output', 'Still processing', 'Preparing response'],
   completedStatus: 'Completed',
   completedWithFilesStatus: 'Completed with files',
   errorStatus: 'Run failed',
@@ -73,6 +74,7 @@ export default function ChatPanel({
   messages,
   onSend,
   onClearHistory,
+  onPreviewFile,
   isSending = false,
   runStatus = null,
   text = defaultChatText,
@@ -86,6 +88,7 @@ export default function ChatPanel({
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploadError, setUploadError] = useState('')
   const [isDragActive, setIsDragActive] = useState(false)
+  const [pendingElapsedSeconds, setPendingElapsedSeconds] = useState(0)
   const dragDepthRef = useRef(0)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
@@ -98,6 +101,31 @@ export default function ChatPanel({
   useEffect(() => {
     inputRef.current?.focus()
   }, [agent.id])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined
+    }
+
+    if (!runStatus?.pending) {
+      return undefined
+    }
+
+    const parsedStartedAtMs = Date.parse(runStatus.startedAt || '')
+    const startMs =
+      Number.isFinite(parsedStartedAtMs) && parsedStartedAtMs > 0 ? parsedStartedAtMs : Date.now()
+
+    const updateElapsed = () => {
+      setPendingElapsedSeconds(Math.max(0, Math.floor((Date.now() - startMs) / 1000)))
+    }
+
+    updateElapsed()
+    const intervalId = window.setInterval(updateElapsed, 1000)
+
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [agent.id, runStatus?.pending, runStatus?.startedAt])
 
   const clearAttachment = () => {
     setSelectedFile(null)
@@ -194,7 +222,23 @@ export default function ChatPanel({
   const hints = Array.isArray(agent.hints) && agent.hints.length > 0 ? agent.hints : copy.hints
   const canSend = Boolean(input.trim() || selectedFile) && !isSending && !activeRunStatus
   const canClearHistory = hasMessages && !isSending && !activeRunStatus
-  const workingLabel = activeRunStatus?.label || interpolate(copy.workingLabel, { agent: agent.name })
+  const runningStatusCycle =
+    Array.isArray(copy.runningStatusCycle) && copy.runningStatusCycle.length > 0
+      ? copy.runningStatusCycle
+      : [copy.runningStatus]
+  const isPendingRunInProgress =
+    Boolean(activeRunStatus?.pending)
+    && activeRunStatus?.state !== 'uploading'
+    && activeRunStatus?.state !== 'dispatching'
+  const cycleIndex =
+    runningStatusCycle.length > 0
+      ? Math.floor(pendingElapsedSeconds / 10) % runningStatusCycle.length
+      : 0
+  const rotatingRunningLabel = runningStatusCycle[cycleIndex] || copy.runningStatus
+  const workingLabel =
+    isPendingRunInProgress && pendingElapsedSeconds >= 10
+      ? `${rotatingRunningLabel} (${pendingElapsedSeconds}s)`
+      : activeRunStatus?.label || interpolate(copy.workingLabel, { agent: agent.name })
   const composerClasses = [
     'composer-shell',
     isDragActive ? 'is-drag-active' : '',
@@ -299,6 +343,7 @@ export default function ChatPanel({
                 agent={agent}
                 locale={locale}
                 text={copy}
+                onPreviewFile={onPreviewFile}
               />
             ))}
 

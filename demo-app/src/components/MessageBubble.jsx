@@ -1,3 +1,5 @@
+import { formatFileSize, getAttachmentLabel } from '../utils/filePreview'
+
 const renderInline = (text) => {
   const parts = text.split(/(\*\*.*?\*\*)/g)
 
@@ -100,25 +102,19 @@ const renderText = (text) => {
   })
 }
 
-const formatFileSize = (bytes) => {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
 const defaultMessageText = {
+  previewArtifactLabel: 'Preview',
   downloadArtifactLabel: 'Download',
   generatedFileLabel: 'Generated file',
 }
 
-const getAttachmentLabel = (filename) => {
-  const extension = filename.split('.').pop()
-  if (!extension || extension === filename) return 'FILE'
-  return extension.toUpperCase().slice(0, 4)
-}
-
-const Attachment = ({ file, actionLabel = '', metaLabel = '' }) => (
+const Attachment = ({
+  file,
+  actionLabel = '',
+  metaLabel = '',
+  previewLabel = '',
+  onPreview = null,
+}) => (
   <div className={`message-file-card ${file.downloadUrl ? 'is-downloadable' : ''}`}>
     <span className="message-file-icon" aria-hidden="true">
       {getAttachmentLabel(file.name)}
@@ -131,21 +127,34 @@ const Attachment = ({ file, actionLabel = '', metaLabel = '' }) => (
         {file.size > 0 ? formatFileSize(file.size) : metaLabel}
       </span>
     </span>
-    {file.downloadUrl ? (
-      <a
-        className="message-file-action"
-        href={file.downloadUrl}
-        download
-        target="_blank"
-        rel="noreferrer"
-      >
-        {actionLabel}
-      </a>
-    ) : null}
+    <span className="message-file-actions">
+      {file.downloadUrl && typeof onPreview === 'function' ? (
+        <button type="button" className="message-file-action is-secondary" onClick={() => onPreview(file)}>
+          {previewLabel}
+        </button>
+      ) : null}
+      {file.downloadUrl ? (
+        <a
+          className="message-file-action"
+          href={file.downloadUrl}
+          download
+          target="_blank"
+          rel="noreferrer"
+        >
+          {actionLabel}
+        </a>
+      ) : null}
+    </span>
   </div>
 )
 
-export default function MessageBubble({ message, agent, locale = 'en-US', text = defaultMessageText }) {
+export default function MessageBubble({
+  message,
+  agent,
+  locale = 'en-US',
+  text = defaultMessageText,
+  onPreviewFile,
+}) {
   const copy = { ...defaultMessageText, ...text }
   const isUser = message.role === 'user'
   const hasText = Boolean(message.text?.trim())
@@ -164,9 +173,14 @@ export default function MessageBubble({ message, agent, locale = 'en-US', text =
             {hasText && <span>{message.text}</span>}
             {hasAttachment && (
               <Attachment
-                file={message.file}
+                file={{
+                  ...message.file,
+                  source: 'upload',
+                }}
+                previewLabel={copy.previewArtifactLabel}
                 actionLabel={copy.downloadArtifactLabel}
                 metaLabel={copy.generatedFileLabel}
+                onPreview={onPreviewFile}
               />
             )}
           </div>
@@ -197,7 +211,18 @@ export default function MessageBubble({ message, agent, locale = 'en-US', text =
       <div className="message-stack">
         <div className="message-bubble assistant-bubble">
           {hasText && renderText(message.text)}
-          {hasAttachment && <Attachment file={message.file} />}
+          {hasAttachment && (
+            <Attachment
+              file={{
+                ...message.file,
+                source: 'artifact',
+              }}
+              previewLabel={copy.previewArtifactLabel}
+              actionLabel={copy.downloadArtifactLabel}
+              metaLabel={copy.generatedFileLabel}
+              onPreview={onPreviewFile}
+            />
+          )}
           {artifacts.length > 0 && (
             <div className="message-artifact-list">
               {artifacts.map((artifact, index) => (
@@ -206,9 +231,12 @@ export default function MessageBubble({ message, agent, locale = 'en-US', text =
                   file={{
                     ...artifact,
                     name: artifact.name || copy.generatedFileLabel,
+                    source: 'artifact',
                   }}
+                  previewLabel={copy.previewArtifactLabel}
                   actionLabel={copy.downloadArtifactLabel}
                   metaLabel={copy.generatedFileLabel}
+                  onPreview={onPreviewFile}
                 />
               ))}
             </div>

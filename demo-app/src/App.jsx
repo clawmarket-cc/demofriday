@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatPanel from './components/ChatPanel'
+import FilePreviewPanel from './components/FilePreviewPanel'
 import {
   agentDefinitions,
   buildAgents,
@@ -108,6 +109,9 @@ const createInitialSendingState = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, false]))
 
 const createInitialRunStatusState = () =>
+  Object.fromEntries(agentDefinitions.map((agent) => [agent.id, null]))
+
+const createInitialPreviewState = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, null]))
 
 const resolveMessageText = (language, message) => {
@@ -459,6 +463,7 @@ export default function App() {
   const [sendingByAgent, setSendingByAgent] = useState(createInitialSendingState)
   const [runStatusByAgent, setRunStatusByAgent] = useState(createInitialRunStatusState)
   const [conversationIdsByAgent, setConversationIdsByAgent] = useState(createInitialConversationIds)
+  const [previewByAgent, setPreviewByAgent] = useState(createInitialPreviewState)
 
   const conversationIdsByAgentRef = useRef(conversationIdsByAgent)
   const copy = translations[language] ?? translations.en
@@ -831,6 +836,7 @@ export default function App() {
   }, [conversations, language, runStatusByAgent, sendingByAgent])
 
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) ?? agents[0]
+  const activePreview = previewByAgent[activeAgentId]
 
   const resolvedConversations = useMemo(() => {
     const translated = {}
@@ -885,6 +891,11 @@ export default function App() {
         [agentId]: null,
       }))
 
+      setPreviewByAgent((prev) => ({
+        ...prev,
+        [agentId]: null,
+      }))
+
       setConversationIdsByAgent((prev) => rotateConversationId(prev, agentId))
     } catch (error) {
       const message =
@@ -921,6 +932,28 @@ export default function App() {
         [agentId]: false,
       }))
     }
+  }
+
+  const handlePreviewFile = (agentId, file) => {
+    if (!agentId || !file) {
+      return
+    }
+
+    setPreviewByAgent((prev) => ({
+      ...prev,
+      [agentId]: file,
+    }))
+  }
+
+  const handleClosePreview = (agentId) => {
+    if (!agentId) {
+      return
+    }
+
+    setPreviewByAgent((prev) => ({
+      ...prev,
+      [agentId]: null,
+    }))
   }
 
   const handleSend = async (payload) => {
@@ -1255,18 +1288,28 @@ export default function App() {
           text={copy.sidebar}
           statusLabels={copy.status}
         />
-        <ChatPanel
-          key={activeAgent.id}
-          agent={activeAgent}
-          messages={resolvedConversations[activeAgent.id] ?? []}
-          onSend={handleSend}
-          onClearHistory={() => handleClearHistory(activeAgent.id)}
-          isSending={sendingByAgent[activeAgent.id]}
-          runStatus={runStatusByAgent[activeAgent.id]}
-          text={copy.chat}
-          statusLabels={copy.status}
-          locale={localeByLanguage[language]}
-        />
+        <div className="workspace-main">
+          <ChatPanel
+            key={activeAgent.id}
+            agent={activeAgent}
+            messages={resolvedConversations[activeAgent.id] ?? []}
+            onSend={handleSend}
+            onClearHistory={() => handleClearHistory(activeAgent.id)}
+            onPreviewFile={(file) => handlePreviewFile(activeAgent.id, file)}
+            isSending={sendingByAgent[activeAgent.id]}
+            runStatus={runStatusByAgent[activeAgent.id]}
+            text={copy.chat}
+            statusLabels={copy.status}
+            locale={localeByLanguage[language]}
+          />
+          {activePreview ? (
+            <FilePreviewPanel
+              file={activePreview}
+              onClose={() => handleClosePreview(activeAgent.id)}
+              text={copy.chat}
+            />
+          ) : null}
+        </div>
       </main>
     </div>
   )

@@ -1,6 +1,7 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as XLSX from 'xlsx'
 import App from './App'
 import {
   clearChat,
@@ -56,6 +57,33 @@ const createPayload = ({ messages = [], runStatus, files = {}, pending } = {}) =
 
 const getComposerInput = () => screen.getAllByPlaceholderText('Message Excel Analyst...')[0]
 const RUNTIME_CONVERSATIONS_CACHE_KEY = '__golemforce-chat-runtime-conversations'
+const createWorkbookPreviewBuffer = () => {
+  const workbook = XLSX.utils.book_new()
+  const overviewSheet = XLSX.utils.aoa_to_sheet([
+    ['Metric', 'Value'],
+    ['Revenue', '120000'],
+    ['Margin', '18%'],
+  ])
+  const forecastSheet = XLSX.utils.aoa_to_sheet([
+    ['Month', 'ARR'],
+    ['Jan', '95000'],
+    ['Feb', '103000'],
+  ])
+
+  XLSX.utils.book_append_sheet(workbook, overviewSheet, 'Overview')
+  XLSX.utils.book_append_sheet(workbook, forecastSheet, 'Forecast')
+
+  const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })
+  if (bytes instanceof ArrayBuffer) {
+    return bytes
+  }
+
+  if (ArrayBuffer.isView(bytes)) {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  }
+
+  return new Uint8Array(bytes).buffer
+}
 
 describe('App chat flow', () => {
   beforeEach(() => {
@@ -69,6 +97,7 @@ describe('App chat flow', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     cleanup()
   })
 
@@ -580,5 +609,113 @@ describe('App chat flow', () => {
     expect(await screen.findByText('Generate the deck')).toBeInTheDocument()
     expect(await screen.findByText('board-deck.pptx')).toBeInTheDocument()
     expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
+  })
+
+  it('opens a workbook preview with sheet tabs in the right-side panel', async () => {
+    const user = userEvent.setup()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => createWorkbookPreviewBuffer(),
+    })
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed with files',
+          artifactCount: 1,
+        }),
+        messages: [
+          { role: 'user', text: 'Build the workbook', timestamp: '2026-03-05T16:00:00.000Z' },
+          { role: 'assistant', text: 'Workbook is ready.', timestamp: '2026-03-05T16:00:01.000Z' },
+        ],
+        files: {
+          newArtifacts: [
+            {
+              id: 'artifact-preview-1',
+              name: 'q1-forecast.xlsx',
+              sizeBytes: 2048,
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              downloadUrl: '/files/artifact-preview-1',
+            },
+          ],
+        },
+      }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Build the workbook')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('q1-forecast.xlsx')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+
+    expect(await screen.findByRole('heading', { name: 'q1-forecast.xlsx' })).toBeInTheDocument()
+    expect(await screen.findByText('Revenue', {}, { timeout: 5000 })).toBeInTheDocument()
+    expect(screen.getByText('Overview')).toBeInTheDocument()
+    expect(screen.getByText('Forecast')).toBeInTheDocument()
+
+    await user.click(screen.getByText('Forecast'))
+
+    expect(await screen.findByText('Feb')).toBeInTheDocument()
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.golemforce.ai/files/artifact-preview-1',
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    )
+  })
+
+  it('opens a PDF preview panel from an agent artifact', async () => {
+    const user = userEvent.setup()
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed with files',
+          artifactCount: 1,
+        }),
+        messages: [
+          { role: 'user', text: 'Generate the PDF', timestamp: '2026-03-05T17:00:00.000Z' },
+          { role: 'assistant', text: 'PDF is ready.', timestamp: '2026-03-05T17:00:01.000Z' },
+        ],
+        files: {
+          newArtifacts: [
+            {
+              id: 'artifact-preview-pdf',
+              name: 'board-summary.pdf',
+              sizeBytes: 1024,
+              mimeType: 'application/pdf',
+              downloadUrl: '/files/artifact-preview-pdf',
+            },
+          ],
+        },
+      }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Generate the PDF')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('board-summary.pdf')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+
+    expect(await screen.findByRole('heading', { name: 'board-summary.pdf' })).toBeInTheDocument()
+    expect(screen.getByTitle('board-summary.pdf preview')).toHaveAttribute(
+      'src',
+      'https://api.golemforce.ai/files/artifact-preview-pdf',
+    )
+    expect(screen.getByRole('tab', { name: 'Details' })).toBeInTheDocument()
   })
 })
