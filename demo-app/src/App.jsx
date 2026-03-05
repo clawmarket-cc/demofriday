@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatPanel from './components/ChatPanel'
 import FilePreviewPanel from './components/FilePreviewPanel'
@@ -23,6 +23,10 @@ import {
   uploadFiles,
 } from './api/openclawProxy'
 import { isAwaitingVisibleAgentResult } from './utils/chatFlow'
+import {
+  appendMissingConversationMessages,
+  buildMessageLooseSignature,
+} from './utils/messageMerge'
 
 const STORAGE_CLIENT_ID_KEY = 'golemforce-chat-client-id'
 const STORAGE_CONVERSATION_IDS_KEY = 'golemforce-chat-conversation-ids'
@@ -237,6 +241,9 @@ const toUiFile = (file) => {
   }
 }
 
+const getUiFileSignature = (file) =>
+  file?.id || file?.downloadUrl || `${file?.name ?? ''}-${file?.size ?? ''}-${file?.type ?? ''}`
+
 const toUiArtifacts = (artifacts = []) => {
   const seen = new Set()
   const normalizedArtifacts = []
@@ -248,10 +255,7 @@ const toUiArtifacts = (artifacts = []) => {
       return
     }
 
-    const dedupeKey =
-      normalizedArtifact.id
-      || normalizedArtifact.downloadUrl
-      || `${normalizedArtifact.name}-${normalizedArtifact.size}-${normalizedArtifact.type}`
+    const dedupeKey = getUiFileSignature(normalizedArtifact)
 
     if (seen.has(dedupeKey)) {
       return
@@ -315,9 +319,12 @@ const attachArtifactsToLatestAssistant = (messages, artifacts) => {
   }
 
   const nextMessages = [...messages]
+  const fileSignature = getUiFileSignature(lastMessage?.file)
   nextMessages[lastIndex] = {
     ...lastMessage,
-    artifacts: toUiArtifacts(artifacts),
+    artifacts: toUiArtifacts([...(lastMessage?.artifacts ?? []), ...artifacts]).filter(
+      (artifact) => getUiFileSignature(artifact) !== fileSignature,
+    ),
   }
 
   return nextMessages
@@ -412,32 +419,6 @@ const mergeConversationMetadataFromFallback = (messages, fallbackMessages) => {
   })
 }
 
-const buildMessageExactSignature = (message) =>
-  `${message?.role ?? ''}|${message?.timestamp ?? ''}|${message?.text ?? ''}`
-
-const buildMessageLooseSignature = (message) => `${message?.role ?? ''}|${message?.text ?? ''}`
-
-const appendMissingConversationMessages = (primaryMessages, secondaryMessages) => {
-  const nextMessages = [...primaryMessages]
-  const seenExactSignatures = new Set(nextMessages.map((message) => buildMessageExactSignature(message)))
-  const seenLooseSignatures = new Set(nextMessages.map((message) => buildMessageLooseSignature(message)))
-
-  secondaryMessages.forEach((message) => {
-    const exactSignature = buildMessageExactSignature(message)
-    const looseSignature = buildMessageLooseSignature(message)
-
-    if (seenExactSignatures.has(exactSignature) || seenLooseSignatures.has(looseSignature)) {
-      return
-    }
-
-    seenExactSignatures.add(exactSignature)
-    seenLooseSignatures.add(looseSignature)
-    nextMessages.push(message)
-  })
-
-  return nextMessages
-}
-
 const shouldPreferFallbackMessages = (backendMessages, fallbackMessages) => {
   if (backendMessages.length < fallbackMessages.length) {
     return true
@@ -471,7 +452,12 @@ const mergeConversationMessages = (backendMessages = [], fallbackMessages = []) 
     return appendMissingConversationMessages(fallbackMessages, backendMessages)
   }
 
-  return appendMissingConversationMessages(backendMessages, fallbackMessages)
+  const fallbackMessagesForBackendMerge = fallbackMessages.map((message) => ({
+    ...message,
+    timestamp: '',
+  }))
+
+  return appendMissingConversationMessages(backendMessages, fallbackMessagesForBackendMerge)
 }
 
 const buildConversationFromPayload = (
@@ -484,7 +470,9 @@ const buildConversationFromPayload = (
     toUiMessage({
       agentId,
       role: message.role,
-      text: message.text,
+      text: message.text || '',
+      file: message.file,
+      artifacts: message.artifacts,
       timestamp: message.timestamp,
       id: `${agentId}-${message.timestamp || 'no-ts'}-${index}`,
     }),
@@ -528,11 +516,22 @@ export default function App() {
   const [previewByAgent, setPreviewByAgent] = useState(createInitialPreviewState)
 
   const conversationIdsByAgentRef = useRef(conversationIdsByAgent)
+  const conversationsRef = useRef(conversations)
   const copy = translations[language] ?? translations.en
+  const copyRef = useRef(copy)
+  const getChatCopy = useCallback(() => copyRef.current?.chat ?? translations.en.chat, [])
 
   useEffect(() => {
     conversationIdsByAgentRef.current = conversationIdsByAgent
   }, [conversationIdsByAgent])
+
+  useEffect(() => {
+    conversationsRef.current = conversations
+  }, [conversations])
+
+  useEffect(() => {
+    copyRef.current = copy
+  }, [copy])
 
   useEffect(() => {
     persistRuntimeConversations(conversations)
@@ -542,6 +541,8 @@ export default function App() {
     let isDisposed = false
     const isCurrentConversation = (agentId, nextConversationId) =>
       conversationIdsByAgentRef.current[agentId] === nextConversationId
+    const getFileReadyResponse = () =>
+      getChatCopy().fileReadyResponse || DEFAULT_FILE_READY_RESPONSE
 
     const hydrateConversations = async () => {
       try {
@@ -584,7 +585,7 @@ export default function App() {
               agentId,
               payload,
               prev[agentId] ?? [],
-              copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+              getFileReadyResponse(),
             )
           })
 
@@ -664,7 +665,7 @@ export default function App() {
                         agentId,
                         nextPayload,
                         prev[agentId] ?? [],
-                        copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+                        getFileReadyResponse(),
                       ),
                     }))
                   }
@@ -683,6 +684,7 @@ export default function App() {
               const assistantText = extractAssistantText(finalPayload, previousAssistantCount)
               const artifacts = extractNewArtifacts(finalPayload)
               const finalRunStatus = extractRunStatus(finalPayload)
+              const chatCopy = getChatCopy()
 
               if (normalizeBackendMessages(finalPayload).length > 0 || artifacts.length > 0) {
                 setConversations((prev) => ({
@@ -691,14 +693,14 @@ export default function App() {
                     agentId,
                     finalPayload,
                     prev[agentId] ?? [],
-                    copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+                    getFileReadyResponse(),
                   ),
                 }))
               } else if (assistantText || artifacts.length > 0) {
                 const fallbackText =
                   artifacts.length > 0
-                    ? copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE
-                    : copy.chat.emptyAssistantResponse || DEFAULT_EMPTY_ASSISTANT_RESPONSE
+                    ? chatCopy.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE
+                    : chatCopy.emptyAssistantResponse || DEFAULT_EMPTY_ASSISTANT_RESPONSE
 
                 setConversations((prev) => ({
                   ...prev,
@@ -725,8 +727,8 @@ export default function App() {
                       pending: false,
                       label:
                         artifacts.length > 0
-                          ? copy.chat.completedWithFilesStatus
-                          : copy.chat.completedStatus,
+                          ? chatCopy.completedWithFilesStatus
+                          : chatCopy.completedStatus,
                       error: null,
                       artifactCount: Math.max(
                         artifacts.length,
@@ -746,8 +748,8 @@ export default function App() {
                   ...(prev[agentId] ?? {}),
                   state: 'error',
                   pending: false,
-                  label: copy.chat.errorStatus,
-                  error: error?.message || copy.chat.errorStatus,
+                  label: getChatCopy().errorStatus,
+                  error: error?.message || getChatCopy().errorStatus,
                   updatedAt: new Date().toISOString(),
                 },
               }))
@@ -771,13 +773,7 @@ export default function App() {
     return () => {
       isDisposed = true
     }
-  }, [
-    copy.chat.completedStatus,
-    copy.chat.completedWithFilesStatus,
-    copy.chat.emptyAssistantResponse,
-    copy.chat.errorStatus,
-    copy.chat.fileReadyResponse,
-  ])
+  }, [getChatCopy])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -785,6 +781,8 @@ export default function App() {
     }
 
     let isDisposed = false
+    const getFileReadyResponse = () =>
+      getChatCopy().fileReadyResponse || DEFAULT_FILE_READY_RESPONSE
     const pendingTargets = agentDefinitions
       .filter((agent) => runStatusByAgent[agent.id]?.pending && !sendingByAgent[agent.id])
       .map((agent) => ({
@@ -848,7 +846,7 @@ export default function App() {
             agentId,
             payload,
             prev[agentId] ?? [],
-            copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+            getFileReadyResponse(),
           )
         })
 
@@ -880,7 +878,7 @@ export default function App() {
       isDisposed = true
       window.clearTimeout(timeoutId)
     }
-  }, [copy.chat.fileReadyResponse, runStatusByAgent, sendingByAgent])
+  }, [getChatCopy, runStatusByAgent, sendingByAgent])
 
   const agents = useMemo(() => {
     const localizedAgents = buildAgents(language)
@@ -960,8 +958,9 @@ export default function App() {
 
       setConversationIdsByAgent((prev) => rotateConversationId(prev, agentId))
     } catch (error) {
+      const chatCopy = getChatCopy()
       const message =
-        (copy.chat.backendErrorPrefix || DEFAULT_BACKEND_ERROR) +
+        (chatCopy.backendErrorPrefix || DEFAULT_BACKEND_ERROR) +
         (error?.message ? `\n\n${error.message}` : '')
 
       setConversations((prev) => ({
@@ -983,7 +982,7 @@ export default function App() {
           ...(prev[agentId] ?? {}),
           state: 'error',
           pending: false,
-          label: copy.chat.errorStatus,
+          label: chatCopy.errorStatus,
           error: error?.message ?? message,
           updatedAt: new Date().toISOString(),
         },
@@ -1016,82 +1015,6 @@ export default function App() {
       ...prev,
       [agentId]: null,
     }))
-  }
-
-  const handleRefreshRun = async (agentId) => {
-    if (!agentId) {
-      return
-    }
-
-    const agent = agentDefinitions.find((candidate) => candidate.id === agentId)
-    const conversationId = conversationIdsByAgentRef.current[agentId]
-
-    if (!agent || !conversationId) {
-      return
-    }
-
-    setRunStatusByAgent((prev) => ({
-      ...prev,
-      [agentId]: {
-        ...(prev[agentId] ?? {}),
-        state: 'running',
-        pending: true,
-        label: copy.chat.refreshingStatus || copy.chat.runningStatus,
-        error: null,
-        updatedAt: new Date().toISOString(),
-      },
-    }))
-
-    try {
-      const payload = await fetchChat({
-        agent: agent.backendName,
-        conversationId,
-        limit: 80,
-      })
-
-      if (conversationIdsByAgentRef.current[agentId] !== conversationId) {
-        return
-      }
-
-      const normalizedMessageCount = normalizeBackendMessages(payload).length
-      const artifacts = extractNewArtifacts(payload)
-      const runStatus = extractRunStatus(payload)
-
-      if (normalizedMessageCount > 0 || (artifacts.length > 0 && runStatus.pending === false)) {
-        setConversations((prev) => ({
-          ...prev,
-          [agentId]: buildConversationFromPayload(
-            agentId,
-            payload,
-            prev[agentId] ?? [],
-            copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
-          ),
-        }))
-      }
-
-      setRunStatusByAgent((prev) => ({
-        ...prev,
-        [agentId]: runStatus.pending
-          ? {
-              ...runStatus,
-              label: runStatus.label || copy.chat.runningStatus,
-              updatedAt: new Date().toISOString(),
-            }
-          : runStatus,
-      }))
-    } catch (error) {
-      setRunStatusByAgent((prev) => ({
-        ...prev,
-        [agentId]: {
-          ...(prev[agentId] ?? {}),
-          state: 'error',
-          pending: false,
-          label: copy.chat.errorStatus,
-          error: error?.message || copy.chat.errorStatus,
-          updatedAt: new Date().toISOString(),
-        },
-      }))
-    }
   }
 
   const handleSend = async (payload) => {
@@ -1134,7 +1057,8 @@ export default function App() {
     }))
 
     try {
-      const existingMessages = conversations[agentId] ?? []
+      const chatCopyAtStart = getChatCopy()
+      const existingMessages = conversationsRef.current[agentId] ?? []
       const previousAssistantCount = existingMessages.filter((message) => message.role === 'assistant').length
       const clientMessageCount = existingMessages.length
       const clientLastAssistantText = getLastAssistantMessageText(existingMessages)
@@ -1145,7 +1069,7 @@ export default function App() {
         [agentId]: {
           state: file ? 'uploading' : 'dispatching',
           pending: true,
-          label: file ? copy.chat.uploadingStatus : copy.chat.dispatchingStatus,
+          label: file ? chatCopyAtStart.uploadingStatus : chatCopyAtStart.dispatchingStatus,
           startedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           runId: null,
@@ -1187,7 +1111,7 @@ export default function App() {
           ...(prev[agentId] ?? {}),
           state: 'dispatching',
           pending: true,
-          label: copy.chat.dispatchingStatus,
+          label: getChatCopy().dispatchingStatus,
           updatedAt: new Date().toISOString(),
           hasUploads: fileIds.length > 0,
         },
@@ -1204,6 +1128,19 @@ export default function App() {
         clientLastAssistantText,
       })
 
+      let directTimeoutId
+      const timeoutPromise = new Promise((resolve) => {
+        directTimeoutId = window.setTimeout(
+          () =>
+            resolve({
+              response: null,
+              error: null,
+              timedOut: true,
+            }),
+          DIRECT_CHAT_RESPONSE_WAIT_MS,
+        )
+      })
+
       const directResult = await Promise.race([
         responsePromise
           .then((response) => ({
@@ -1216,18 +1153,12 @@ export default function App() {
             error,
             timedOut: false,
           })),
-        new Promise((resolve) => {
-          window.setTimeout(
-            () =>
-              resolve({
-                response: null,
-                error: null,
-                timedOut: true,
-              }),
-            DIRECT_CHAT_RESPONSE_WAIT_MS,
-          )
-        }),
+        timeoutPromise,
       ])
+
+      if (typeof window !== 'undefined' && directTimeoutId) {
+        window.clearTimeout(directTimeoutId)
+      }
 
       if (directResult.error) {
         throw directResult.error
@@ -1252,7 +1183,7 @@ export default function App() {
               ...(prev[agentId] ?? {}),
               state: 'running',
               pending: true,
-              label: copy.chat.runningStatus,
+              label: getChatCopy().runningStatus,
               updatedAt: new Date().toISOString(),
             },
           }))
@@ -1283,7 +1214,7 @@ export default function App() {
                   agentId,
                   payload,
                   prev[agentId] ?? [],
-                  copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+                  getChatCopy().fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
                 ),
               }))
             }
@@ -1316,9 +1247,10 @@ export default function App() {
       const finalRunStatus = extractRunStatus(finalPayload)
       const isStillPending = !finalPayload || finalRunStatus.pending
       const isFileOnlyAssistantMessage = artifacts.length > 0 && !assistantText && !isStillPending
+      const chatCopy = getChatCopy()
       const finalAssistantText = isFileOnlyAssistantMessage
-        ? copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE
-        : assistantText || copy.chat.emptyAssistantResponse || DEFAULT_EMPTY_ASSISTANT_RESPONSE
+        ? chatCopy.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE
+        : assistantText || chatCopy.emptyAssistantResponse || DEFAULT_EMPTY_ASSISTANT_RESPONSE
 
       if (
         finalPayload
@@ -1330,7 +1262,7 @@ export default function App() {
             agentId,
             finalPayload,
             prev[agentId] ?? [],
-            copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+            chatCopy.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
           ),
         }))
       } else if (assistantText || artifacts.length > 0 || !isStillPending) {
@@ -1357,7 +1289,7 @@ export default function App() {
               ...finalRunStatus,
               state: 'running',
               pending: true,
-              label: copy.chat.runningStatus,
+              label: chatCopy.runningStatus,
               error: null,
               hasUploads: fileIds.length > 0 || finalRunStatus.hasUploads,
               updatedAt: new Date().toISOString(),
@@ -1367,7 +1299,7 @@ export default function App() {
               state: 'completed',
               pending: false,
               label:
-                artifacts.length > 0 ? copy.chat.completedWithFilesStatus : copy.chat.completedStatus,
+                artifacts.length > 0 ? chatCopy.completedWithFilesStatus : chatCopy.completedStatus,
               error: null,
               artifactCount: Math.max(artifacts.length, Number(finalRunStatus.artifactCount ?? 0)),
               hasUploads: fileIds.length > 0 || finalRunStatus.hasUploads,
@@ -1375,8 +1307,9 @@ export default function App() {
             },
       }))
     } catch (error) {
+      const chatCopy = getChatCopy()
       const message =
-        (copy.chat.backendErrorPrefix || DEFAULT_BACKEND_ERROR) +
+        (chatCopy.backendErrorPrefix || DEFAULT_BACKEND_ERROR) +
         (error?.message ? `\n\n${error.message}` : '')
 
       setConversations((prev) => ({
@@ -1398,7 +1331,7 @@ export default function App() {
           ...(prev[agentId] ?? {}),
           state: 'error',
           pending: false,
-          label: copy.chat.errorStatus,
+          label: chatCopy.errorStatus,
           error: error?.message ?? message,
           updatedAt: new Date().toISOString(),
         },
@@ -1433,7 +1366,6 @@ export default function App() {
             messages={resolvedConversations[activeAgent.id] ?? []}
             onSend={handleSend}
             onClearHistory={() => handleClearHistory(activeAgent.id)}
-            onRefreshRun={() => handleRefreshRun(activeAgent.id)}
             onPreviewFile={(file) => handlePreviewFile(activeAgent.id, file)}
             isSending={sendingByAgent[activeAgent.id]}
             runStatus={runStatusByAgent[activeAgent.id]}

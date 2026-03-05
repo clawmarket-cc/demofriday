@@ -170,6 +170,65 @@ const normalizeFileRecords = (files, fallbackName) => {
   return files.map((file) => normalizeFileRecord(file, fallbackName)).filter(Boolean)
 }
 
+const dedupeFiles = (files = []) => {
+  const seen = new Set()
+
+  return files.filter((file) => {
+    const key = file.id || file.downloadUrl || `${file.name}-${file.size}-${file.type}`
+
+    if (seen.has(key)) {
+      return false
+    }
+
+    seen.add(key)
+    return true
+  })
+}
+
+const normalizeMessageFileBundle = (message) => {
+  if (!message || typeof message !== 'object') {
+    return {
+      file: null,
+      artifacts: [],
+    }
+  }
+
+  const files = []
+  const pushSingle = (value, fallbackName = 'Attachment') => {
+    const normalized = normalizeFileRecord(value, fallbackName)
+
+    if (normalized) {
+      files.push(normalized)
+    }
+  }
+  const pushMany = (value, fallbackName = 'Attachment') => {
+    files.push(...normalizeFileRecords(value, fallbackName))
+  }
+
+  pushSingle(message.file, 'Attachment')
+  pushSingle(message.attachment, 'Attachment')
+  pushMany(message.attachments, 'Attachment')
+  pushMany(message.artifacts, 'Generated file')
+  pushMany(message.generatedFiles, 'Generated file')
+
+  if (Array.isArray(message.files)) {
+    pushMany(message.files, 'Attachment')
+  } else if (message.files && typeof message.files === 'object') {
+    pushSingle(message.files.file ?? message.files.attachment, 'Attachment')
+    pushMany(message.files.attachments, 'Attachment')
+    pushMany(message.files.artifacts, 'Generated file')
+    pushMany(message.files.generated, 'Generated file')
+    pushMany(message.files.generatedFiles, 'Generated file')
+  }
+
+  const normalizedFiles = dedupeFiles(files)
+
+  return {
+    file: normalizedFiles[0] ?? null,
+    artifacts: normalizedFiles.slice(1),
+  }
+}
+
 export const uploadFiles = async ({ agent, conversationId, files }) => {
   const formData = new FormData()
   const selectedFiles = Array.isArray(files) ? files.filter(Boolean) : [files].filter(Boolean)
@@ -273,17 +332,27 @@ export const normalizeBackendMessages = (payload) => {
   }
 
   return payload.messages
-    .map((message) => ({
-      role: message?.role,
-      text: messageToText(message),
-      timestamp:
-        message?.timestamp ??
-        message?.createdAt ??
-        message?.created_at ??
-        message?.time ??
-        null,
-    }))
-    .filter((message) => (message.role === 'user' || message.role === 'assistant') && message.text)
+    .map((message) => {
+      const normalizedFiles = normalizeMessageFileBundle(message)
+
+      return {
+        role: message?.role,
+        text: messageToText(message),
+        timestamp:
+          message?.timestamp ??
+          message?.createdAt ??
+          message?.created_at ??
+          message?.time ??
+          null,
+        file: normalizedFiles.file,
+        artifacts: normalizedFiles.artifacts,
+      }
+    })
+    .filter(
+      (message) =>
+        (message.role === 'user' || message.role === 'assistant')
+        && (message.text || message.file || message.artifacts.length > 0),
+    )
 }
 
 export const countAssistantMessages = (payload) =>
@@ -294,7 +363,14 @@ export const extractAssistantText = (payload, previousAssistantCount = 0) => {
   const assistants = normalized.filter((message) => message.role === 'assistant')
 
   if (assistants.length > previousAssistantCount) {
-    return assistants[assistants.length - 1].text
+    const newestTextMessage = assistants
+      .slice(previousAssistantCount)
+      .reverse()
+      .find((message) => message.text)
+
+    if (newestTextMessage) {
+      return newestTextMessage.text
+    }
   }
 
   const directAssistantText = messageContentToText(payload?.assistant)
@@ -306,13 +382,23 @@ export const extractAssistantText = (payload, previousAssistantCount = 0) => {
   return ''
 }
 
+const extractEmbeddedAssistantFiles = (payload) =>
+  dedupeFiles(
+    normalizeBackendMessages(payload)
+      .filter((message) => message.role === 'assistant')
+      .flatMap((message) => [message.file, ...(message.artifacts ?? [])].filter(Boolean)),
+  )
+
 export const extractArtifacts = (payload) =>
-  normalizeFileRecords(payload?.files?.artifacts, 'Generated file')
+  dedupeFiles([
+    ...normalizeFileRecords(payload?.files?.artifacts, 'Generated file'),
+    ...extractEmbeddedAssistantFiles(payload),
+  ])
 
 export const extractNewArtifacts = (payload) => {
   const newArtifacts = normalizeFileRecords(payload?.files?.newArtifacts, 'Generated file')
   if (newArtifacts.length > 0) {
-    return newArtifacts
+    return dedupeFiles([...newArtifacts, ...extractEmbeddedAssistantFiles(payload)])
   }
 
   return extractArtifacts(payload)

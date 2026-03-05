@@ -93,6 +93,8 @@ describe('App chat flow', () => {
     vi.clearAllMocks()
     fetchChat.mockResolvedValue(createPayload())
     clearChat.mockResolvedValue({ ok: true })
+    postChat.mockResolvedValue(createPayload())
+    pollForChatCompletion.mockResolvedValue(null)
     uploadFiles.mockResolvedValue({ uploaded: [] })
   })
 
@@ -757,5 +759,47 @@ describe('App chat flow', () => {
       'https://api.golemforce.ai/files/artifact-preview-pdf',
     )
     expect(screen.getByRole('tab', { name: 'Details' })).toBeInTheDocument()
+  })
+
+  it('renders a returned Word document when the backend attaches it directly to an assistant message', async () => {
+    const user = userEvent.setup()
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed with files',
+          artifactCount: 1,
+        }),
+        messages: [
+          { role: 'user', text: 'Create the proposal doc', timestamp: '2026-03-05T18:00:00.000Z' },
+          {
+            role: 'assistant',
+            text: '',
+            timestamp: '2026-03-05T18:00:01.000Z',
+            file: {
+              id: 'artifact-word-1',
+              originalFilename: 'proposal.docx',
+              contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              downloadUrl: '/files/artifact-word-1',
+            },
+          },
+        ],
+      }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Create the proposal doc')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect((await screen.findAllByText('proposal.docx')).length).toBeGreaterThan(0)
+    expect(await screen.findByRole('link', { name: 'Download' })).toHaveAttribute(
+      'href',
+      'https://api.golemforce.ai/files/artifact-word-1',
+    )
   })
 })

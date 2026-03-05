@@ -33,9 +33,6 @@ const defaultChatText = {
   dispatchingStatus: 'Starting request',
   runningStatus: 'Waiting for agent output',
   runningStatusCycle: ['Waiting for agent output', 'Still processing', 'Preparing response'],
-  refreshingStatus: 'Refreshing status',
-  refreshStatusLabel: 'Refresh',
-  refreshStatusAria: 'Refresh run status',
   completedStatus: 'Completed',
   completedWithFilesStatus: 'Completed with files',
   errorStatus: 'Run failed',
@@ -77,7 +74,6 @@ export default function ChatPanel({
   messages,
   onSend,
   onClearHistory,
-  onRefreshRun,
   onPreviewFile,
   isSending = false,
   runStatus = null,
@@ -370,16 +366,6 @@ export default function ChatPanel({
                   <span className="typing-dot" style={{ animationDelay: '320ms' }} />
                 </span>
                 <span className="typing-copy">{workingLabel}</span>
-                {typeof onRefreshRun === 'function' ? (
-                  <button
-                    type="button"
-                    className="typing-refresh-btn"
-                    onClick={onRefreshRun}
-                    aria-label={copy.refreshStatusAria}
-                  >
-                    {copy.refreshStatusLabel}
-                  </button>
-                ) : null}
               </div>
             )}
 

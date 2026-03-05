@@ -111,11 +111,64 @@ describe('openclawProxy polling', () => {
         role: 'user',
         text: 'Analyze the file',
         timestamp: null,
+        file: null,
+        artifacts: [],
       },
       {
         role: 'assistant',
         text: 'Done',
         timestamp: null,
+        file: null,
+        artifacts: [],
+      },
+    ])
+  })
+
+  it('keeps assistant message attachments when files are embedded on the message', () => {
+    const messages = normalizeBackendMessages({
+      messages: [
+        {
+          role: 'assistant',
+          text: '',
+          file: {
+            id: 'doc-1',
+            originalFilename: 'summary.docx',
+            contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            downloadUrl: '/files/doc-1',
+          },
+          attachments: [
+            {
+              id: 'doc-2',
+              originalFilename: 'appendix.docx',
+              contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              downloadUrl: '/files/doc-2',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(messages).toEqual([
+      {
+        role: 'assistant',
+        text: '',
+        timestamp: null,
+        file: {
+          id: 'doc-1',
+          name: 'summary.docx',
+          size: 0,
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          downloadUrl: 'https://api.golemforce.ai/files/doc-1',
+        },
+        artifacts: [
+          {
+            id: 'doc-2',
+            name: 'appendix.docx',
+            size: 0,
+            type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            downloadUrl: 'https://api.golemforce.ai/files/doc-2',
+          },
+        ],
       },
     ])
   })
