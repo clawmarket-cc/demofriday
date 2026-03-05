@@ -24,6 +24,9 @@ const defaultChatText = {
   attachFileAria: 'Attach file',
   messagePlaceholder: 'Message {agent}...',
   sendMessageAria: 'Send message',
+  clearHistoryAria: 'Clear chat history for {agent}',
+  clearHistoryTooltip: 'Clear chat history',
+  clearHistoryConfirm: 'Clear all messages in the {agent} chat?',
   fileTooLarge: 'File is too large. Maximum size is {maxSize}.',
   fileTypeError: 'Unsupported file type. Upload PDF, Excel, Word, or PowerPoint files.',
   removeAttachmentAria: 'Remove attachment',
@@ -61,6 +64,7 @@ export default function ChatPanel({
   agent,
   messages,
   onSend,
+  onClearHistory,
   isSending = false,
   text = defaultChatText,
   statusLabels = defaultStatusLabels,
@@ -173,10 +177,12 @@ export default function ChatPanel({
   }
 
   const hasUserMessages = messages.some((message) => message.role === 'user')
+  const hasMessages = messages.length > 0
   const isTyping = messages[messages.length - 1]?.role === 'user'
   const { color: statusColor, label: statusLabel } = getStatusMeta(agent.status, labels)
   const hints = Array.isArray(agent.hints) && agent.hints.length > 0 ? agent.hints : copy.hints
   const canSend = Boolean(input.trim() || selectedFile) && !isSending
+  const canClearHistory = hasMessages && !isSending
   const composerClasses = [
     'composer-shell',
     isDragActive ? 'is-drag-active' : '',
@@ -184,6 +190,20 @@ export default function ChatPanel({
   ]
     .filter(Boolean)
     .join(' ')
+
+  const handleClearHistory = () => {
+    if (!canClearHistory || typeof onClearHistory !== 'function') {
+      return
+    }
+
+    const confirmMessage = interpolate(copy.clearHistoryConfirm, { agent: agent.name })
+
+    if (typeof window !== 'undefined' && !window.confirm(confirmMessage)) {
+      return
+    }
+
+    onClearHistory()
+  }
 
   return (
     <section
@@ -216,10 +236,29 @@ export default function ChatPanel({
           <h2>{agent.name}</h2>
         </div>
 
-        <span className="chat-status-pill">
-          <span className="chat-status-dot" aria-hidden="true" />
-          {statusLabel}
-        </span>
+        <div className="chat-header-actions">
+          <span className="chat-status-pill">
+            <span className="chat-status-dot" aria-hidden="true" />
+            {statusLabel}
+          </span>
+          <button
+            type="button"
+            className="chat-clear-history-btn"
+            onClick={handleClearHistory}
+            disabled={!canClearHistory}
+            aria-label={interpolate(copy.clearHistoryAria, { agent: agent.name })}
+            title={interpolate(copy.clearHistoryTooltip, { agent: agent.name })}
+          >
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="1.7"
+                d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-6 4v7m6-7v7m-7 3h8a1 1 0 001-1V7H7v13a1 1 0 001 1z"
+              />
+            </svg>
+          </button>
+        </div>
       </header>
 
       <div className="chat-stream">

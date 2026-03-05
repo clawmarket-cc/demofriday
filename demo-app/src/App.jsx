@@ -28,6 +28,7 @@ const DEFAULT_BACKEND_ERROR =
   'I could not reach the model backend. Please retry. If this keeps failing, check /health on the proxy.'
 const DEFAULT_EMPTY_ASSISTANT_RESPONSE = 'The backend completed without returning assistant text.'
 const DEFAULT_UPLOAD_ERROR = 'Upload completed without returning a file id.'
+const CHAT_REQUEST_TIMEOUT_MS = 3000
 const DIRECT_CHAT_RESPONSE_WAIT_MS = 2500
 
 const createInitialConversations = () =>
@@ -213,6 +214,17 @@ export default function App() {
     }
   }
 
+  const handleClearHistory = (agentId) => {
+    if (!agentId) {
+      return
+    }
+
+    setConversations((prev) => ({
+      ...prev,
+      [agentId]: [],
+    }))
+  }
+
   const handleSend = async (payload) => {
     const agentId = activeAgentId
     const agent = activeAgent
@@ -276,6 +288,7 @@ export default function App() {
         conversationId,
         message: backendMessage,
         fileIds,
+        timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
       })
 
       const directResult = await Promise.race([
@@ -379,6 +392,7 @@ export default function App() {
           agent={activeAgent}
           messages={resolvedConversations[activeAgent.id] ?? []}
           onSend={handleSend}
+          onClearHistory={() => handleClearHistory(activeAgent.id)}
           isSending={sendingByAgent[activeAgent.id]}
           text={copy.chat}
           statusLabels={copy.status}
