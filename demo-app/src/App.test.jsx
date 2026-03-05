@@ -1,6 +1,6 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import {
   clearChat,
@@ -55,14 +55,21 @@ const createPayload = ({ messages = [], runStatus, files = {}, pending } = {}) =
 })
 
 const getComposerInput = () => screen.getAllByPlaceholderText('Message Excel Analyst...')[0]
+const RUNTIME_CONVERSATIONS_CACHE_KEY = '__golemforce-chat-runtime-conversations'
 
 describe('App chat flow', () => {
   beforeEach(() => {
     window.localStorage.clear()
+    window.sessionStorage.clear()
+    delete window[RUNTIME_CONVERSATIONS_CACHE_KEY]
     vi.clearAllMocks()
     fetchChat.mockResolvedValue(createPayload())
     clearChat.mockResolvedValue({ ok: true })
     uploadFiles.mockResolvedValue({ uploaded: [] })
+  })
+
+  afterEach(() => {
+    cleanup()
   })
 
   it('hides the waiting indicator once the latest turn has an assistant reply', async () => {
@@ -303,9 +310,9 @@ describe('App chat flow', () => {
 
     expect(await screen.findByText('brief.xlsx')).toBeInTheDocument()
 
-    const hasUploadDownloadLink = (await screen.findAllByRole('link', { name: 'Download' })).some(
-      (link) => /\/files\/upload-1$/.test(link.getAttribute('href') ?? ''),
-    )
+    const downloadLinks = await screen.findAllByRole('link', { name: 'Download' })
+    const downloadHrefs = downloadLinks.map((link) => link.getAttribute('href') ?? '')
+    const hasUploadDownloadLink = downloadHrefs.some((href) => /\/files\/upload-1$/.test(href))
 
     expect(hasUploadDownloadLink).toBe(true)
 
@@ -314,11 +321,93 @@ describe('App chat flow', () => {
 
     expect(await screen.findByText('brief.xlsx')).toBeInTheDocument()
 
-    const hasUploadDownloadLinkAfterSwitch = (
-      await screen.findAllByRole('link', { name: 'Download' })
-    ).some((link) => /\/files\/upload-1$/.test(link.getAttribute('href') ?? ''))
+    const downloadLinksAfterSwitch = await screen.findAllByRole('link', { name: 'Download' })
+    const downloadHrefsAfterSwitch = downloadLinksAfterSwitch.map(
+      (link) => link.getAttribute('href') ?? '',
+    )
+    const hasUploadDownloadLinkAfterSwitch = downloadHrefsAfterSwitch.some((href) =>
+      /\/files\/upload-1$/.test(href),
+    )
 
     expect(hasUploadDownloadLinkAfterSwitch).toBe(true)
+  })
+
+  it('keeps earlier uploaded files visible after later non-file replies', async () => {
+    const user = userEvent.setup()
+
+    uploadFiles.mockResolvedValue({
+      uploaded: [
+        {
+          id: 'upload-1',
+          name: 'brief.xlsx',
+          size: 14,
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          downloadUrl: '/files/upload-1',
+        },
+      ],
+    })
+
+    postChat
+      .mockResolvedValueOnce(
+        createPayload({
+          pending: false,
+          runStatus: createRunStatus({
+            state: 'completed',
+            pending: false,
+            label: 'Completed',
+          }),
+          messages: [
+            { role: 'user', text: 'Analyze this workbook', timestamp: '2026-03-05T13:00:00.000Z' },
+            { role: 'assistant', text: 'Workbook parsed.', timestamp: '2026-03-05T13:00:01.000Z' },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createPayload({
+          pending: false,
+          runStatus: createRunStatus({
+            state: 'completed',
+            pending: false,
+            label: 'Completed',
+          }),
+          messages: [
+            { role: 'user', text: 'Analyze this workbook', timestamp: '2026-03-05T13:00:00.000Z' },
+            { role: 'assistant', text: 'Workbook parsed.', timestamp: '2026-03-05T13:00:01.000Z' },
+            { role: 'user', text: 'Now summarize in 3 bullets', timestamp: '2026-03-05T13:01:00.000Z' },
+            {
+              role: 'assistant',
+              text: 'Here are 3 bullets.',
+              timestamp: '2026-03-05T13:01:01.000Z',
+            },
+          ],
+        }),
+      )
+
+    const { container } = render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    const fileInput = container.querySelector('input[type="file"]')
+    const workbook = new File(['a,b\n1,2'], 'brief.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+
+    await user.upload(fileInput, workbook)
+    await user.type(getComposerInput(), 'Analyze this workbook')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('brief.xlsx')).toBeInTheDocument()
+
+    await user.type(getComposerInput(), 'Now summarize in 3 bullets')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect((await screen.findAllByText('Here are 3 bullets.')).length).toBeGreaterThan(0)
+    expect(await screen.findByText('brief.xlsx')).toBeInTheDocument()
+
+    const hasUploadDownloadLink = (await screen.findAllByRole('link', { name: 'Download' })).some(
+      (link) => /\/files\/upload-1$/.test(link.getAttribute('href') ?? ''),
+    )
+
+    expect(hasUploadDownloadLink).toBe(true)
   })
 
   it('keeps the optimistic user message when the backend returns only a generated file', async () => {

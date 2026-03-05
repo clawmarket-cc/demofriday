@@ -135,11 +135,11 @@ const getClientId = () => {
   }
 
   try {
-    const existing = window.localStorage.getItem(STORAGE_CLIENT_ID_KEY)
+    const existing = window.sessionStorage.getItem(STORAGE_CLIENT_ID_KEY)
     const clientId = existing || createClientId()
 
     if (!existing) {
-      window.localStorage.setItem(STORAGE_CLIENT_ID_KEY, clientId)
+      window.sessionStorage.setItem(STORAGE_CLIENT_ID_KEY, clientId)
     }
 
     return `${clientId}:${DEFAULT_THREAD_ID}`
@@ -161,7 +161,7 @@ const readStoredConversationIds = () => {
   }
 
   try {
-    const raw = window.localStorage.getItem(STORAGE_CONVERSATION_IDS_KEY)
+    const raw = window.sessionStorage.getItem(STORAGE_CONVERSATION_IDS_KEY)
 
     if (!raw) {
       return {}
@@ -180,9 +180,9 @@ const persistConversationIds = (conversationIds) => {
   }
 
   try {
-    window.localStorage.setItem(STORAGE_CONVERSATION_IDS_KEY, JSON.stringify(conversationIds))
+    window.sessionStorage.setItem(STORAGE_CONVERSATION_IDS_KEY, JSON.stringify(conversationIds))
   } catch {
-    // Ignore localStorage persistence failures and keep the in-memory ids.
+    // Ignore sessionStorage persistence failures and keep the in-memory ids.
   }
 }
 
@@ -328,7 +328,7 @@ const attachUploadedFileToUserMessage = (messages, messageId, uploadedFile) =>
       : message,
   )
 
-const attachLatestUserFileFromFallback = (messages, fallbackMessages) => {
+const mergeConversationMetadataFromFallback = (messages, fallbackMessages) => {
   if (!Array.isArray(messages) || messages.length === 0) {
     return messages
   }
@@ -337,34 +337,74 @@ const attachLatestUserFileFromFallback = (messages, fallbackMessages) => {
     return messages
   }
 
-  const fallbackUserWithFile = [...fallbackMessages]
-    .reverse()
-    .find((message) => message?.role === 'user' && message.file)
+  let fallbackCursor = 0
 
-  if (!fallbackUserWithFile) {
-    return messages
-  }
+  return messages.map((message) => {
+    const messageText = typeof message?.text === 'string' ? message.text : ''
+    let matchedIndex = -1
 
-  let latestUserIndex = -1
+    for (let index = fallbackCursor; index < fallbackMessages.length; index += 1) {
+      const fallbackMessage = fallbackMessages[index]
 
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === 'user') {
-      latestUserIndex = index
+      if (fallbackMessage?.role !== message?.role) {
+        continue
+      }
+
+      if ((fallbackMessage?.text ?? '') !== messageText) {
+        continue
+      }
+
+      if (
+        fallbackMessage?.timestamp
+        && message?.timestamp
+        && fallbackMessage.timestamp !== message.timestamp
+      ) {
+        continue
+      }
+
+      matchedIndex = index
       break
     }
-  }
 
-  if (latestUserIndex === -1 || messages[latestUserIndex]?.file) {
-    return messages
-  }
+    if (matchedIndex === -1) {
+      for (let index = fallbackCursor; index < fallbackMessages.length; index += 1) {
+        const fallbackMessage = fallbackMessages[index]
 
-  const nextMessages = [...messages]
-  nextMessages[latestUserIndex] = {
-    ...nextMessages[latestUserIndex],
-    file: toUiFile(fallbackUserWithFile.file),
-  }
+        if (fallbackMessage?.role !== message?.role) {
+          continue
+        }
 
-  return nextMessages
+        if ((fallbackMessage?.text ?? '') !== messageText) {
+          continue
+        }
+
+        matchedIndex = index
+        break
+      }
+    }
+
+    if (matchedIndex === -1) {
+      return message
+    }
+
+    fallbackCursor = matchedIndex + 1
+    const fallbackMessage = fallbackMessages[matchedIndex]
+    const merged = { ...message }
+
+    if (!merged.file && fallbackMessage?.file) {
+      merged.file = toUiFile(fallbackMessage.file)
+    }
+
+    if (
+      (!Array.isArray(merged.artifacts) || merged.artifacts.length === 0)
+      && Array.isArray(fallbackMessage?.artifacts)
+      && fallbackMessage.artifacts.length > 0
+    ) {
+      merged.artifacts = toUiArtifacts(fallbackMessage.artifacts)
+    }
+
+    return merged
+  })
 }
 
 const buildConversationFromPayload = (agentId, payload, fallbackMessages = []) => {
@@ -378,20 +418,20 @@ const buildConversationFromPayload = (agentId, payload, fallbackMessages = []) =
     }),
   )
   const messages = normalizedMessages.length > 0 ? normalizedMessages : [...fallbackMessages]
-  const messagesWithUserFiles = attachLatestUserFileFromFallback(messages, fallbackMessages)
+  const mergedMessages = mergeConversationMetadataFromFallback(messages, fallbackMessages)
   const artifacts = extractNewArtifacts(payload)
-  const withArtifacts = attachArtifactsToLatestAssistant(messagesWithUserFiles, artifacts)
+  const withArtifacts = attachArtifactsToLatestAssistant(mergedMessages, artifacts)
 
   if (withArtifacts) {
     return withArtifacts
   }
 
   if (artifacts.length === 0) {
-    return messagesWithUserFiles
+    return mergedMessages
   }
 
   return [
-    ...messagesWithUserFiles,
+    ...mergedMessages,
     toUiMessage({
       agentId,
       role: 'assistant',

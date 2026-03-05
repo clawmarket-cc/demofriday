@@ -33,10 +33,16 @@ const stripFinalEnvelope = (value) => {
   return trimmed
 }
 
-const stripUiFileContextBlock = (value) =>
-  typeof value === 'string'
-    ? value.replace(/\n*\[UI_FILE_CONTEXT\][\s\S]*?\[\/UI_FILE_CONTEXT\]\s*$/i, '').trim()
-    : ''
+const stripUiFileContextBlock = (value) => {
+  if (typeof value !== 'string') {
+    return ''
+  }
+
+  return value
+    .replace(/\[UI_FILE_CONTEXT\][\s\S]*?\[\/UI_FILE_CONTEXT\]/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
 
 export const apiBaseUrl = trimTrailingSlashes(
   import.meta.env.VITE_API_BASE_URL?.trim() || DEFAULT_API_BASE_URL,
