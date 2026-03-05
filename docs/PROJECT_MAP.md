@@ -16,6 +16,8 @@ DemoFriday/
     package.json
     src/
       App.jsx
+      api/
+        openclawProxy.js
       i18n.js
       i18n/
         agents.js
@@ -57,6 +59,10 @@ DemoFriday/
   - `demo-app/src/components/ChatPanel.jsx`: input, file attach/drag-drop, validation, stream shell.
   - `demo-app/src/components/MessageBubble.jsx`: render markdown-like text and attachment cards.
 
+- Backend integration:
+  - `demo-app/src/api/openclawProxy.js`: calls `/agents`, `/chat`, polling logic, payload normalization.
+  - `demo-app/src/App.jsx`: orchestrates send flow, polling, lane availability, transcript hydration.
+
 - Visual system:
   - `demo-app/src/index.css`
   - Global styles, layout, theme variables, component classes.
@@ -84,4 +90,4 @@ DemoFriday/
 ## Known Structural Notes
 
 - `i18n.js` is a stable barrel so existing imports stay simple while internals stay modular.
-- The project is frontend-only and currently simulates assistant responses (no API integration layer yet).
+- Chat responses are backend-driven via the OpenClaw proxy contract.

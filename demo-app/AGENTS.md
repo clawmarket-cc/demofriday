@@ -12,7 +12,11 @@ App-local navigation guide for AI coding agents.
 
 - `App.jsx`
   - source of truth for selected language, selected agent, and per-agent conversation arrays
-  - adds user messages and simulated assistant responses
+  - orchestrates send flow, backend transcript hydration, and status updates
+
+- `api/openclawProxy.js`
+  - HTTP client for `/agents` and `/chat`
+  - assistant reply extraction and pending-run polling
 
 - `i18n.js`
   - compatibility barrel that re-exports from `src/i18n/*`

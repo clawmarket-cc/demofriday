@@ -27,6 +27,7 @@ npm run preview  # preview production build
 ## Task -> File Routing
 
 - Change app-level state flow: `demo-app/src/App.jsx`
+- Change backend chat integration or polling behavior: `demo-app/src/api/openclawProxy.js`
 - Change agent list and top-left panel UI: `demo-app/src/components/Sidebar.jsx`
 - Change message composer or file upload behavior: `demo-app/src/components/ChatPanel.jsx`
 - Change message rendering (lists/code/tables/attachments): `demo-app/src/components/MessageBubble.jsx`

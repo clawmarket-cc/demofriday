@@ -25,6 +25,7 @@ npm run dev
 ## Primary App Files
 
 - `demo-app/src/App.jsx`: top-level state, active agent, message flow
+- `demo-app/src/api/openclawProxy.js`: backend proxy integration (`/agents`, `/chat`)
 - `demo-app/src/i18n.js`: stable i18n export barrel
 - `demo-app/src/i18n/`: split i18n modules (`languages`, `agents`, `translations`, `helpers`)
 - `demo-app/src/components/Sidebar.jsx`: agent picker + language switch

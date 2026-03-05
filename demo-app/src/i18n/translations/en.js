@@ -34,13 +34,17 @@ const en = {
     selectedFileLabel: 'Selected file',
     removeAttachmentAria: 'Remove attachment',
     removeAttachmentLabel: 'Remove',
+    backendErrorPrefix: 'I could not reach the model backend. Please retry.',
+    pendingTimeout:
+      'The model run is still pending. Try again in a moment or refresh chat history from the backend.',
   },
   agents: {
-    excel: {
+    'excel-analyst': {
       name: 'Excel Analyst',
       description: 'Analyze spreadsheets, generate reports',
       greeting:
         "Hey! I'm your Excel Analyst. I can help you analyze spreadsheets, generate pivot tables, clean data, create formulas, and build reports. Drop a file or tell me what you need.",
+      hints: ['Build a revenue pivot', 'Flag broken formulas', 'Clean duplicate rows'],
       responses: [
         "I've analyzed the spreadsheet. Here's what I found:\n\n**Summary:**\n- 1,247 rows of transaction data\n- 3 columns with missing values\n- Revenue trend is up 12% QoQ\n\nWould you like me to generate a detailed report or create a pivot table?",
         "Done! I've created a pivot table breaking down revenue by region and quarter. The DACH region shows the strongest growth at 18.3%. Want me to export this as a new sheet?",
@@ -48,11 +52,12 @@ const en = {
         "Here's the formula you need:\n\n```\n=VLOOKUP(A2, Sheet2!$A:$D, 3, FALSE)\n```\n\nThis will pull the matching value from column C of Sheet2. Want me to apply it across all rows?",
       ],
     },
-    pdf: {
+    'pdf-agent': {
       name: 'PDF Agent',
       description: 'Extract data, summarize pdfs',
       greeting:
         "Hi there! I'm your PDF Agent. I can extract information from PDFs, summarize documents, answer questions about contracts, and pull structured data from any document. What can I help with?",
+      hints: ['Summarize this contract', 'Extract key clauses', 'Pull financial figures'],
       responses: [
         "I've scanned through the document. Here's a quick summary:\n\n**Contract Overview:**\n- Type: Commercial Lease Agreement\n- Duration: 36 months\n- Monthly rent: EUR 4,500\n- Break clause: After 12 months with 3-month notice\n\nWant me to flag any unusual clauses?",
         'I found 3 clauses that need attention:\n\n1. **Section 4.2** - Automatic renewal without explicit opt-out\n2. **Section 7.1** - Tenant liable for structural repairs (unusual)\n3. **Section 9.3** - Non-compete radius of 15km (quite broad)\n\nShall I draft a summary for your legal team?',
@@ -60,11 +65,12 @@ const en = {
         "I've compiled the key financial figures from the annual report:\n\n- **Revenue:** EUR 2.3M (+15% YoY)\n- **EBITDA:** EUR 420K\n- **Net margin:** 18.2%\n\nThe document also mentions planned expansion into the German market in Q3. Want me to dig deeper into any section?",
       ],
     },
-    powerpoint: {
+    'powerpoint-maker': {
       name: 'PowerPoint Maker',
       description: 'Create revenue-focused decks, executive narratives, and polished slides',
       greeting:
         "Hi! I'm your PowerPoint Maker. Share your company goals, numbers, and audience, and I'll build a presentation that tells a clear revenue story from problem to growth plan.",
+      hints: ['Create a board deck', 'Turn KPIs into slides', 'Build a revenue storyline'],
       responses: [
         "I've drafted a 12-slide revenue deck with a clear storyline:\n\n1. Market opportunity\n2. Revenue performance\n3. Growth drivers\n4. 90-day execution plan\n\nWant me to tailor it for board, investors, or sales leadership?",
         "I transformed your KPI data into slide-ready visuals:\n\n- Revenue CAGR: 21.4%\n- Gross margin improved from 48% to 56%\n- CAC payback reduced to 4.2 months\n\nI can now generate speaker notes for each slide.",
