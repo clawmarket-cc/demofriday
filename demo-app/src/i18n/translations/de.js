@@ -35,6 +35,9 @@ const de = {
     selectedFileLabel: 'Ausgewaehlte Datei',
     removeAttachmentAria: 'Anhang entfernen',
     removeAttachmentLabel: 'Entfernen',
+    downloadArtifactLabel: 'Download',
+    generatedFileLabel: 'Erzeugte Datei',
+    emptyAssistantResponse: 'Das Backend hat keine Assistant-Antwort zurueckgegeben.',
     backendErrorPrefix: 'Backend nicht erreichbar. Bitte erneut versuchen.',
     pendingTimeout:
       'Der Lauf ist noch ausstehend. Bitte gleich erneut versuchen oder Chat-Verlauf aktualisieren.',

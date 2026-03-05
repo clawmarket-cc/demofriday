@@ -23,7 +23,6 @@ const defaultChatText = {
   typingAria: '{agent} is typing',
   attachFileAria: 'Attach file',
   messagePlaceholder: 'Message {agent}...',
-  dropPlaceholder: 'Drop a file to attach',
   sendMessageAria: 'Send message',
   fileTooLarge: 'File is too large. Maximum size is {maxSize}.',
   fileTypeError: 'Unsupported file type. Upload PDF, Excel, Word, or PowerPoint files.',
@@ -84,9 +83,6 @@ export default function ChatPanel({
   }, [messages])
 
   useEffect(() => {
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
     inputRef.current?.focus()
   }, [agent.id])
 
@@ -165,13 +161,7 @@ export default function ChatPanel({
 
     onSend({
       text: trimmedInput,
-      file: selectedFile
-        ? {
-            name: selectedFile.name,
-            size: selectedFile.size,
-            type: selectedFile.type,
-          }
-        : null,
+      file: selectedFile,
     })
 
     setInput('')
@@ -208,6 +198,10 @@ export default function ChatPanel({
         '--status-text': statusColor,
       }}
       aria-label={interpolate(copy.conversationAria, { agent: agent.name })}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       <header className="chat-header">
         <div className="chat-agent-mark" aria-hidden="true">
@@ -248,7 +242,13 @@ export default function ChatPanel({
         ) : (
           <div className="chat-scroll-content">
             {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} agent={agent} locale={locale} />
+              <MessageBubble
+                key={message.id}
+                message={message}
+                agent={agent}
+                locale={locale}
+                text={copy}
+              />
             ))}
 
             {isTyping && (
@@ -281,14 +281,10 @@ export default function ChatPanel({
         <form onSubmit={handleSubmit} className="composer-form">
           <div
             className={composerClasses}
-            onDragEnter={handleDragEnter}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
           >
             <button
               type="button"
-              className="composer-icon-btn"
+              className={`composer-icon-btn ${isDragActive ? 'is-drag-active' : ''}`}
               aria-label={copy.attachFileAria}
               onClick={handleAttachClick}
             >
@@ -332,11 +328,7 @@ export default function ChatPanel({
               type="text"
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder={
-                isDragActive
-                  ? copy.dropPlaceholder
-                  : interpolate(copy.messagePlaceholder, { agent: agent.name })
-              }
+              placeholder={interpolate(copy.messagePlaceholder, { agent: agent.name })}
               className="composer-input"
             />
 

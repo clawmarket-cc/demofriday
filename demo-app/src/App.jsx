@@ -11,31 +11,30 @@ import {
   translations,
 } from './i18n'
 import {
+  extractArtifacts,
   extractAssistantText,
-  fetchAgentLanes,
   fetchChat,
   normalizeBackendMessages,
   pollForAssistantReply,
   postChat,
+  uploadFiles,
 } from './api/openclawProxy'
 
 const STORAGE_CLIENT_ID_KEY = 'golemforce-chat-client-id'
 const DEFAULT_THREAD_ID = 'main'
-const STATUS_REFRESH_MS = 30000
 
+const DEFAULT_FILE_PROMPT = 'Please analyze the uploaded file.'
 const DEFAULT_BACKEND_ERROR =
   'I could not reach the model backend. Please retry. If this keeps failing, check /health on the proxy.'
-const DEFAULT_PENDING_TIMEOUT =
-  'The model run is still pending. Try again in a moment or refresh chat history from the backend.'
+const DEFAULT_EMPTY_ASSISTANT_RESPONSE = 'The backend completed without returning assistant text.'
+const DEFAULT_UPLOAD_ERROR = 'Upload completed without returning a file id.'
+const DIRECT_CHAT_RESPONSE_WAIT_MS = 2500
 
 const createInitialConversations = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, []]))
 
 const createInitialSendingState = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, false]))
-
-const createInitialStatusState = () =>
-  Object.fromEntries(agentDefinitions.map((agent) => [agent.id, agent.status]))
 
 const resolveMessageText = (language, message) => {
   if (message.role !== 'assistant') {
@@ -76,37 +75,41 @@ const getConversationId = () => {
   }
 }
 
-const formatFileSize = (bytes) => {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+const toUiFile = (file) => {
+  if (!file) {
+    return null
+  }
+
+  return {
+    id: file.id ?? file.fileId ?? null,
+    name: file.name ?? file.fileName ?? file.filename ?? 'Attachment',
+    size: Number(file.size ?? 0) || 0,
+    type: file.type ?? file.mimeType ?? '',
+    downloadUrl: file.downloadUrl ?? '',
+  }
 }
 
-const buildBackendMessage = (text, file) => {
+const buildBackendMessage = (text, hasFile) => {
   const trimmed = text?.trim() ?? ''
 
-  if (!file) {
+  if (!hasFile) {
     return trimmed
   }
 
-  const attachmentLine = `Attachment metadata: ${file.name} (${formatFileSize(file.size)}, ${
-    file.type || 'unknown type'
-  })`
-
   if (trimmed) {
-    return `${trimmed}\n\n[${attachmentLine}]`
+    return trimmed
   }
 
-  return `Please process this attachment. [${attachmentLine}]`
+  return DEFAULT_FILE_PROMPT
 }
 
-const toUiMessage = ({ agentId, role, text, file = null, timestamp, id }) => ({
+const toUiMessage = ({ agentId, role, text, file = null, artifacts = [], timestamp, id }) => ({
   id: id ?? `${agentId}-${role}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
   role,
   agentId,
   text,
-  file,
+  file: toUiFile(file),
+  artifacts: Array.isArray(artifacts) ? artifacts.map((artifact) => toUiFile(artifact)).filter(Boolean) : [],
   timestamp: timestamp ?? new Date().toISOString(),
 })
 
@@ -115,7 +118,6 @@ export default function App() {
   const [activeAgentId, setActiveAgentId] = useState(agentDefinitions[0].id)
   const [conversations, setConversations] = useState(createInitialConversations)
   const [sendingByAgent, setSendingByAgent] = useState(createInitialSendingState)
-  const [statusByAgent, setStatusByAgent] = useState(createInitialStatusState)
 
   const conversationId = useMemo(() => getConversationId(), [])
   const copy = translations[language] ?? translations.en
@@ -123,37 +125,15 @@ export default function App() {
   useEffect(() => {
     let isDisposed = false
 
-    const syncAgentAvailability = async () => {
-      try {
-        const payload = await fetchAgentLanes()
-
-        if (isDisposed || !Array.isArray(payload?.agents)) {
-          return
-        }
-
-        setStatusByAgent((prev) => {
-          const next = { ...prev }
-
-          payload.agents.forEach((agent) => {
-            if (!agent?.id || !(agent.id in prev)) {
-              return
-            }
-
-            next[agent.id] = agent.exists ? 'online' : 'offline'
-          })
-
-          return next
-        })
-      } catch (error) {
-        console.error('Failed to sync agent availability:', error)
-      }
-    }
-
     const hydrateConversations = async () => {
       try {
         const settled = await Promise.allSettled(
           agentDefinitions.map(async (agent) => {
-            const payload = await fetchChat({ agentId: agent.id, conversationId, limit: 80 })
+            const payload = await fetchChat({
+              agent: agent.backendName,
+              conversationId,
+              limit: 80,
+            })
             const messages = normalizeBackendMessages(payload)
 
             return [agent.id, messages]
@@ -192,18 +172,14 @@ export default function App() {
           return next
         })
       } catch (error) {
-        console.error('Failed to load chat history:', error)
+        console.error('Failed to hydrate conversations from backend history:', error)
       }
     }
 
-    syncAgentAvailability()
     hydrateConversations()
-
-    const interval = setInterval(syncAgentAvailability, STATUS_REFRESH_MS)
 
     return () => {
       isDisposed = true
-      clearInterval(interval)
     }
   }, [conversationId])
 
@@ -212,9 +188,9 @@ export default function App() {
 
     return localizedAgents.map((agent) => ({
       ...agent,
-      status: sendingByAgent[agent.id] ? 'busy' : statusByAgent[agent.id] ?? agent.status,
+      status: sendingByAgent[agent.id] ? 'busy' : agent.status,
     }))
-  }, [language, sendingByAgent, statusByAgent])
+  }, [language, sendingByAgent])
 
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) ?? agents[0]
 
@@ -239,8 +215,9 @@ export default function App() {
 
   const handleSend = async (payload) => {
     const agentId = activeAgentId
+    const agent = activeAgent
 
-    if (sendingByAgent[agentId]) {
+    if (!agent || sendingByAgent[agentId]) {
       return
     }
 
@@ -259,7 +236,7 @@ export default function App() {
       agentId,
       role: 'user',
       text: trimmedText,
-      file: file ?? null,
+      file,
       timestamp: new Date().toISOString(),
     })
 
@@ -273,30 +250,76 @@ export default function App() {
       [agentId]: true,
     }))
 
-    const previousAssistantCount = (conversations[agentId] ?? []).filter(
-      (message) => message.role === 'assistant',
-    ).length
-
     try {
-      const backendMessage = buildBackendMessage(trimmedText, file)
+      const previousAssistantCount = (conversations[agentId] ?? []).filter(
+        (message) => message.role === 'assistant',
+      ).length
+      let fileIds = []
 
-      const response = await postChat({
-        agentId,
+      if (file) {
+        const uploadResponse = await uploadFiles({
+          agent: agent.backendName,
+          conversationId,
+          files: [file],
+        })
+
+        fileIds = (uploadResponse.uploaded ?? []).map((uploadedFile) => uploadedFile.id).filter(Boolean)
+
+        if (fileIds.length === 0) {
+          throw new Error(DEFAULT_UPLOAD_ERROR)
+        }
+      }
+
+      const backendMessage = buildBackendMessage(trimmedText, fileIds.length > 0)
+      const responsePromise = postChat({
+        agent: agent.backendName,
         conversationId,
         message: backendMessage,
+        fileIds,
       })
 
-      let assistantText = extractAssistantText(response, previousAssistantCount)
+      const directResult = await Promise.race([
+        responsePromise
+          .then((response) => ({
+            response,
+            error: null,
+            timedOut: false,
+          }))
+          .catch((error) => ({
+            response: null,
+            error,
+            timedOut: false,
+          })),
+        new Promise((resolve) => {
+          window.setTimeout(
+            () =>
+              resolve({
+                response: null,
+                error: null,
+                timedOut: true,
+              }),
+            DIRECT_CHAT_RESPONSE_WAIT_MS,
+          )
+        }),
+      ])
 
-      if (!assistantText && response.pending) {
+      if (directResult.error) {
+        throw directResult.error
+      }
+
+      let assistantText = directResult.response ? extractAssistantText(directResult.response) : ''
+      const artifacts = directResult.response ? extractArtifacts(directResult.response) : []
+
+      if (!assistantText) {
         assistantText = await pollForAssistantReply({
-          agentId,
+          agent: agent.backendName,
           conversationId,
           previousAssistantCount,
         })
       }
 
-      const finalAssistantText = assistantText || copy.chat.pendingTimeout || DEFAULT_PENDING_TIMEOUT
+      const finalAssistantText =
+        assistantText || copy.chat.emptyAssistantResponse || DEFAULT_EMPTY_ASSISTANT_RESPONSE
 
       setConversations((prev) => ({
         ...prev,
@@ -306,6 +329,7 @@ export default function App() {
             agentId,
             role: 'assistant',
             text: finalAssistantText,
+            artifacts,
             timestamp: new Date().toISOString(),
           }),
         ],

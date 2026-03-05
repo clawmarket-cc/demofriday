@@ -5,6 +5,7 @@ import powerpointLogo from '../assets/agent-icons/powerpoint.svg'
 export const agentDefinitions = [
   {
     id: 'excel-analyst',
+    backendName: 'Excel Analyst',
     color: '#22c55e',
     logo: excelLogo,
     icon: 'XLS',
@@ -12,6 +13,7 @@ export const agentDefinitions = [
   },
   {
     id: 'pdf-agent',
+    backendName: 'PDF Agent',
     color: '#ef4444',
     logo: pdfLogo,
     icon: 'PDF',
@@ -19,6 +21,7 @@ export const agentDefinitions = [
   },
   {
     id: 'powerpoint-maker',
+    backendName: 'PowerPoint Maker',
     color: '#0ea5e9',
     logo: powerpointLogo,
     icon: 'PPT',

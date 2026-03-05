@@ -100,9 +100,58 @@ const renderText = (text) => {
   })
 }
 
-export default function MessageBubble({ message, agent }) {
+const formatFileSize = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const defaultMessageText = {
+  downloadArtifactLabel: 'Download',
+  generatedFileLabel: 'Generated file',
+}
+
+const getAttachmentLabel = (filename) => {
+  const extension = filename.split('.').pop()
+  if (!extension || extension === filename) return 'FILE'
+  return extension.toUpperCase().slice(0, 4)
+}
+
+const Attachment = ({ file, actionLabel = '', metaLabel = '' }) => (
+  <div className={`message-file-card ${file.downloadUrl ? 'is-downloadable' : ''}`}>
+    <span className="message-file-icon" aria-hidden="true">
+      {getAttachmentLabel(file.name)}
+    </span>
+    <span className="message-file-copy">
+      <span className="message-file-name" title={file.name}>
+        {file.name}
+      </span>
+      <span className="message-file-meta">
+        {file.size > 0 ? formatFileSize(file.size) : metaLabel}
+      </span>
+    </span>
+    {file.downloadUrl ? (
+      <a
+        className="message-file-action"
+        href={file.downloadUrl}
+        download
+        target="_blank"
+        rel="noreferrer"
+      >
+        {actionLabel}
+      </a>
+    ) : null}
+  </div>
+)
+
+export default function MessageBubble({ message, agent, locale = 'en-US', text = defaultMessageText }) {
+  const copy = { ...defaultMessageText, ...text }
   const isUser = message.role === 'user'
-  const time = new Date(message.timestamp).toLocaleTimeString([], {
+  const hasText = Boolean(message.text?.trim())
+  const hasAttachment = Boolean(message.file)
+  const artifacts = Array.isArray(message.artifacts) ? message.artifacts.filter(Boolean) : []
+  const time = new Date(message.timestamp).toLocaleTimeString(locale, {
     hour: '2-digit',
     minute: '2-digit',
   })
@@ -111,7 +160,10 @@ export default function MessageBubble({ message, agent }) {
     return (
       <div className="message-row is-user">
         <div className="message-stack">
-          <div className="message-bubble user-bubble">{message.text}</div>
+          <div className="message-bubble user-bubble">
+            {hasText && <span>{message.text}</span>}
+            {hasAttachment && <Attachment file={message.file} />}
+          </div>
           <p className="message-time align-end">{time}</p>
         </div>
       </div>
@@ -129,11 +181,33 @@ export default function MessageBubble({ message, agent }) {
         }}
         aria-hidden="true"
       >
-        {agent.icon}
+        {agent.logo ? (
+          <img className="agent-logo-image" src={agent.logo} alt="" />
+        ) : (
+          agent.icon
+        )}
       </span>
 
       <div className="message-stack">
-        <div className="message-bubble assistant-bubble">{renderText(message.text)}</div>
+        <div className="message-bubble assistant-bubble">
+          {hasText && renderText(message.text)}
+          {hasAttachment && <Attachment file={message.file} />}
+          {artifacts.length > 0 && (
+            <div className="message-artifact-list">
+              {artifacts.map((artifact, index) => (
+                <Attachment
+                  key={artifact.id ?? artifact.downloadUrl ?? `${message.id}-artifact-${index}`}
+                  file={{
+                    ...artifact,
+                    name: artifact.name || copy.generatedFileLabel,
+                  }}
+                  actionLabel={copy.downloadArtifactLabel}
+                  metaLabel={copy.generatedFileLabel}
+                />
+              ))}
+            </div>
+          )}
+        </div>
         <p className="message-time">{time}</p>
       </div>
     </div>

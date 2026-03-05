@@ -34,6 +34,9 @@ const en = {
     selectedFileLabel: 'Selected file',
     removeAttachmentAria: 'Remove attachment',
     removeAttachmentLabel: 'Remove',
+    downloadArtifactLabel: 'Download',
+    generatedFileLabel: 'Generated file',
+    emptyAssistantResponse: 'The backend completed without returning assistant text.',
     backendErrorPrefix: 'I could not reach the model backend. Please retry.',
     pendingTimeout:
       'The model run is still pending. Try again in a moment or refresh chat history from the backend.',

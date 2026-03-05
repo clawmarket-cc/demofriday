@@ -9,6 +9,7 @@ export const buildAgents = (language) => {
     name: copy.agents[agent.id].name,
     description: copy.agents[agent.id].description,
     greeting: copy.agents[agent.id].greeting,
+    hints: copy.agents[agent.id].hints ?? translations.en.agents[agent.id].hints ?? [],
   }))
 }
 

@@ -2,6 +2,8 @@ const DEFAULT_API_BASE_URL = 'https://api.golemforce.ai'
 const DEFAULT_POLL_INTERVAL_MS = 1500
 
 const trimTrailingSlashes = (value) => value.replace(/\/+$/, '')
+const isFormData = (value) => typeof FormData !== 'undefined' && value instanceof FormData
+
 const stripFinalEnvelope = (value) => {
   if (typeof value !== 'string') {
     return ''
@@ -51,12 +53,15 @@ const readJson = async (response) => {
 }
 
 const requestJson = async (path, options = {}, params = {}) => {
+  const headers = new Headers(options.headers ?? {})
+
+  if (!isFormData(options.body) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+
   const response = await fetch(buildUrl(path, params), {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
     ...options,
+    headers,
   })
 
   const payload = await readJson(response)
@@ -75,24 +80,101 @@ const requestJson = async (path, options = {}, params = {}) => {
 
 export const fetchAgentLanes = async () => requestJson('/agents')
 
-export const fetchChat = async ({ agentId, conversationId, limit = 80 }) =>
-  requestJson('/chat', {}, { agentId, conversationId, limit })
+export const fetchChat = async ({ agent, agentId, conversationId, limit = 80 }) =>
+  requestJson('/chat', {}, { agent: agent ?? agentId, conversationId, limit })
+
+const resolveDownloadUrl = (downloadUrl, fileId) => {
+  if (typeof downloadUrl === 'string' && downloadUrl.trim()) {
+    if (/^https?:\/\//i.test(downloadUrl)) {
+      return downloadUrl
+    }
+
+    if (downloadUrl.startsWith('/')) {
+      return `${apiBaseUrl}${downloadUrl}`
+    }
+
+    return `${apiBaseUrl}/${downloadUrl.replace(/^\/+/, '')}`
+  }
+
+  if (fileId) {
+    return buildUrl(`/files/${fileId}`)
+  }
+
+  return ''
+}
+
+const normalizeFileRecord = (file, fallbackName = 'Generated file') => {
+  if (!file || typeof file !== 'object') {
+    return null
+  }
+
+  const id = file.id ?? file.fileId ?? file._id ?? ''
+  const name =
+    file.name ?? file.fileName ?? file.filename ?? file.originalName ?? file.originalFilename ?? fallbackName
+  const size = Number(file.size ?? file.bytes ?? file.byteSize ?? 0)
+  const type = file.type ?? file.mimeType ?? file.mimetype ?? ''
+
+  return {
+    id,
+    name,
+    size: Number.isFinite(size) ? size : 0,
+    type,
+    downloadUrl: resolveDownloadUrl(file.downloadUrl ?? file.url ?? file.href, id),
+  }
+}
+
+const normalizeFileRecords = (files, fallbackName) => {
+  if (!Array.isArray(files)) {
+    return []
+  }
+
+  return files.map((file) => normalizeFileRecord(file, fallbackName)).filter(Boolean)
+}
+
+export const uploadFiles = async ({ agent, conversationId, files }) => {
+  const formData = new FormData()
+  const selectedFiles = Array.isArray(files) ? files.filter(Boolean) : [files].filter(Boolean)
+
+  if (agent) {
+    formData.append('agent', agent)
+  }
+
+  if (conversationId) {
+    formData.append('conversationId', conversationId)
+  }
+
+  selectedFiles.forEach((file) => {
+    formData.append('files', file)
+  })
+
+  const payload = await requestJson('/files', {
+    method: 'POST',
+    body: formData,
+  })
+
+  return {
+    ...payload,
+    uploaded: normalizeFileRecords(payload?.uploaded, 'Uploaded file'),
+  }
+}
 
 export const postChat = async ({
-  agentId,
+  agent,
   conversationId,
   message,
-  thinking = 'low',
-  timeoutMs = 45000,
+  fileIds = [],
+  thinking,
+  timeoutMs,
 }) =>
   requestJson('/chat', {
     method: 'POST',
     body: JSON.stringify({
-      agentId,
+      agent,
       conversationId,
       message,
-      thinking,
-      timeoutMs,
+      fileIds,
+      ...(thinking ? { thinking } : {}),
+      ...(timeoutMs ? { timeoutMs } : {}),
     }),
   })
 
@@ -170,16 +252,22 @@ export const extractAssistantText = (payload, previousAssistantCount = 0) => {
     return assistants[assistants.length - 1].text
   }
 
-  if (typeof payload?.assistant === 'string' && payload.assistant.trim()) {
-    return stripFinalEnvelope(payload.assistant)
+  const directAssistantText = messageContentToText(payload?.assistant)
+
+  if (directAssistantText) {
+    return directAssistantText
   }
 
   return ''
 }
 
+export const extractArtifacts = (payload) =>
+  normalizeFileRecords(payload?.files?.artifacts, 'Generated file')
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export const pollForAssistantReply = async ({
+  agent,
   agentId,
   conversationId,
   previousAssistantCount,
@@ -190,7 +278,7 @@ export const pollForAssistantReply = async ({
 
   while (Date.now() < deadline) {
     await delay(pollIntervalMs)
-    const payload = await fetchChat({ agentId, conversationId, limit: 200 })
+    const payload = await fetchChat({ agent: agent ?? agentId, conversationId, limit: 200 })
     const assistantText = extractAssistantText(payload, previousAssistantCount)
 
     if (assistantText) {

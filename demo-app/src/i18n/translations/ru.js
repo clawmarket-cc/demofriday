@@ -34,6 +34,9 @@ const ru = {
     selectedFileLabel: 'Выбранный файл',
     removeAttachmentAria: 'Удалить вложение',
     removeAttachmentLabel: 'Удалить',
+    downloadArtifactLabel: 'Скачать',
+    generatedFileLabel: 'Сгенерированный файл',
+    emptyAssistantResponse: 'Backend завершил запрос без текста ответа ассистента.',
     backendErrorPrefix: 'Не удалось подключиться к модельному backend. Попробуйте снова.',
     pendingTimeout:
       'Запуск модели еще выполняется. Повторите запрос чуть позже или обновите историю чата.',
