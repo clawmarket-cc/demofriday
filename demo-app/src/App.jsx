@@ -340,6 +340,54 @@ const attachUploadedFileToUserMessage = (messages, messageId, uploadedFile) =>
       : message,
   )
 
+const getMessageRichnessScore = (message) =>
+  (message?.file ? 3 : 0)
+  + (Array.isArray(message?.artifacts) ? message.artifacts.length * 2 : 0)
+  + (message?.text?.trim() ? 1 : 0)
+  + (message?.timestamp ? 1 : 0)
+
+const mergeDuplicateMessages = (currentMessage, nextMessage) => {
+  const preferredMessage =
+    getMessageRichnessScore(nextMessage) >= getMessageRichnessScore(currentMessage)
+      ? nextMessage
+      : currentMessage
+  const fallbackMessage = preferredMessage === nextMessage ? currentMessage : nextMessage
+
+  return {
+    ...fallbackMessage,
+    ...preferredMessage,
+    text: preferredMessage?.text || fallbackMessage?.text || '',
+    file: preferredMessage?.file || fallbackMessage?.file || null,
+    artifacts: toUiArtifacts([
+      ...(fallbackMessage?.artifacts ?? []),
+      ...(preferredMessage?.artifacts ?? []),
+    ]),
+    timestamp: preferredMessage?.timestamp || fallbackMessage?.timestamp || null,
+    id: preferredMessage?.id || fallbackMessage?.id,
+  }
+}
+
+const collapseAdjacentDuplicateMessages = (messages = []) => {
+  if (!Array.isArray(messages) || messages.length < 2) {
+    return Array.isArray(messages) ? messages : []
+  }
+
+  return messages.reduce((accumulator, message) => {
+    const previousMessage = accumulator[accumulator.length - 1]
+
+    if (
+      previousMessage
+      && buildMessageLooseSignature(previousMessage) === buildMessageLooseSignature(message)
+    ) {
+      accumulator[accumulator.length - 1] = mergeDuplicateMessages(previousMessage, message)
+      return accumulator
+    }
+
+    accumulator.push(message)
+    return accumulator
+  }, [])
+}
+
 const mergeConversationMetadataFromFallback = (messages, fallbackMessages) => {
   if (!Array.isArray(messages) || messages.length === 0) {
     return messages
@@ -408,11 +456,13 @@ const mergeConversationMetadataFromFallback = (messages, fallbackMessages) => {
     }
 
     if (
-      (!Array.isArray(merged.artifacts) || merged.artifacts.length === 0)
-      && Array.isArray(fallbackMessage?.artifacts)
+      Array.isArray(fallbackMessage?.artifacts)
       && fallbackMessage.artifacts.length > 0
     ) {
-      merged.artifacts = toUiArtifacts(fallbackMessage.artifacts)
+      merged.artifacts = toUiArtifacts([
+        ...(Array.isArray(merged.artifacts) ? merged.artifacts : []),
+        ...fallbackMessage.artifacts,
+      ])
     }
 
     return merged
@@ -478,7 +528,9 @@ const buildConversationFromPayload = (
     }),
   )
   const messages = mergeConversationMessages(normalizedMessages, fallbackMessages)
-  const mergedMessages = mergeConversationMetadataFromFallback(messages, fallbackMessages)
+  const mergedMessages = collapseAdjacentDuplicateMessages(
+    mergeConversationMetadataFromFallback(messages, fallbackMessages),
+  )
   const artifacts = extractNewArtifacts(payload)
   const withArtifacts = attachArtifactsToLatestAssistant(mergedMessages, artifacts)
 
