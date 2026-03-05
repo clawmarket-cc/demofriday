@@ -1,16 +1,53 @@
-# React + Vite
+# demo-app
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite frontend that simulates a multi-agent workspace (Excel, PDF, PowerPoint agents).
 
-Currently, two official plugins are available:
+## Run
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+```bash
+npm install
+npm run dev
+```
 
-## React Compiler
+## Build and Quality
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+npm run build
+npm run lint
+npm run preview
+```
 
-## Expanding the ESLint configuration
+## Structure
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```text
+src/
+  main.jsx                # React bootstrap
+  App.jsx                 # app-level state and orchestration
+  i18n.js                 # stable export barrel
+  i18n/                   # split i18n modules
+    languages.js          # language metadata
+    agents.js             # agent definitions and logos
+    helpers.js            # i18n helper functions
+    translations/         # per-language copy files
+  index.css               # global styles and layout system
+  components/
+    Sidebar.jsx           # agent list, status, language switch
+    ChatPanel.jsx         # chat stream, composer, file upload UX
+    MessageBubble.jsx     # user/assistant message rendering
+  assets/agent-icons/     # SVG logos used by agents
+```
+
+## Change Routing
+
+- Update language metadata: `src/i18n/languages.js`
+- Update agent metadata/icons: `src/i18n/agents.js`
+- Update copy or canned responses: `src/i18n/translations/*.js`
+- Update response simulation logic: `src/App.jsx`
+- Update upload limits or file support: `src/components/ChatPanel.jsx`
+- Update message markdown-like rendering: `src/components/MessageBubble.jsx`
+- Update visual style/theme: `src/index.css`
+
+## Notes
+
+- Responses are currently simulated on the client (no backend/API integration in this app yet).
+- Keep translation key shapes aligned across all language files to avoid undefined text at runtime.
