@@ -419,7 +419,7 @@ describe('App chat flow', () => {
     expect(await screen.findByText('report.xlsx')).toBeInTheDocument()
   })
 
-  it('surfaces a timeout assistant message instead of staying stuck in pending', async () => {
+  it('keeps the run in pending state without injecting a timeout assistant message', async () => {
     const user = userEvent.setup()
 
     postChat.mockResolvedValue(
@@ -441,7 +441,7 @@ describe('App chat flow', () => {
           pending: true,
           label: 'Waiting for agent output',
         }),
-        messages: [{ role: 'user', text: 'Need summary', timestamp: '2026-03-05T15:00:00.000Z' }],
+        messages: [],
       }),
     )
 
@@ -451,8 +451,9 @@ describe('App chat flow', () => {
     await user.type(getComposerInput(), 'Need summary')
     await user.click(screen.getByLabelText('Send message'))
 
-    expect((await screen.findAllByText(/still pending/i)).length).toBeGreaterThan(0)
-    expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
+    expect(await screen.findByText('Need summary')).toBeInTheDocument()
+    expect(await screen.findByText('Waiting for agent output')).toBeInTheDocument()
+    expect(screen.queryByText(/still pending/i)).not.toBeInTheDocument()
   })
 
   it('keeps earlier uploaded files visible after later non-file replies', async () => {

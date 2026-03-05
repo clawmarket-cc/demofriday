@@ -21,10 +21,7 @@ import {
   postChat,
   uploadFiles,
 } from './api/openclawProxy'
-import {
-  hasVisibleAssistantResultAfterLatestUser,
-  isAwaitingVisibleAgentResult,
-} from './utils/chatFlow'
+import { isAwaitingVisibleAgentResult } from './utils/chatFlow'
 
 const STORAGE_CLIENT_ID_KEY = 'golemforce-chat-client-id'
 const STORAGE_CONVERSATION_IDS_KEY = 'golemforce-chat-conversation-ids'
@@ -332,28 +329,6 @@ const attachUploadedFileToUserMessage = (messages, messageId, uploadedFile) =>
       : message,
   )
 
-const appendAssistantIfNoVisibleResult = ({
-  messages,
-  agentId,
-  text,
-  artifacts = [],
-}) => {
-  if (hasVisibleAssistantResultAfterLatestUser(messages)) {
-    return messages
-  }
-
-  return [
-    ...messages,
-    toUiMessage({
-      agentId,
-      role: 'assistant',
-      text,
-      artifacts,
-      timestamp: new Date().toISOString(),
-    }),
-  ]
-}
-
 const mergeConversationMetadataFromFallback = (messages, fallbackMessages) => {
   if (!Array.isArray(messages) || messages.length === 0) {
     return messages
@@ -645,24 +620,12 @@ export default function App() {
               if (normalizeBackendMessages(finalPayload).length > 0 || artifacts.length > 0) {
                 setConversations((prev) => ({
                   ...prev,
-                  [agentId]: finalRunStatus.pending
-                    ? appendAssistantIfNoVisibleResult({
-                        messages: buildConversationFromPayload(
-                          agentId,
-                          finalPayload,
-                          prev[agentId] ?? [],
-                          copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
-                        ),
-                        agentId,
-                        text: copy.chat.pendingTimeout,
-                        artifacts: [],
-                      })
-                    : buildConversationFromPayload(
-                        agentId,
-                        finalPayload,
-                        prev[agentId] ?? [],
-                        copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
-                      ),
+                  [agentId]: buildConversationFromPayload(
+                    agentId,
+                    finalPayload,
+                    prev[agentId] ?? [],
+                    copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+                  ),
                 }))
               } else if (assistantText || artifacts.length > 0) {
                 const fallbackText =
@@ -688,14 +651,7 @@ export default function App() {
               setRunStatusByAgent((prev) => ({
                 ...prev,
                 [agentId]: finalRunStatus.pending
-                  ? {
-                      ...finalRunStatus,
-                      state: 'timeout',
-                      pending: false,
-                      label: copy.chat.pendingTimeout,
-                      error: null,
-                      updatedAt: new Date().toISOString(),
-                    }
+                  ? finalRunStatus
                   : {
                       ...finalRunStatus,
                       state: 'completed',
@@ -753,7 +709,111 @@ export default function App() {
     copy.chat.completedWithFilesStatus,
     copy.chat.emptyAssistantResponse,
     copy.chat.errorStatus,
+    copy.chat.fileReadyResponse,
   ])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined
+    }
+
+    let isDisposed = false
+    const pendingTargets = agentDefinitions
+      .filter((agent) => runStatusByAgent[agent.id]?.pending && !sendingByAgent[agent.id])
+      .map((agent) => ({
+        agentId: agent.id,
+        backendName: agent.backendName,
+        conversationId: conversationIdsByAgentRef.current[agent.id],
+      }))
+
+    if (pendingTargets.length === 0) {
+      return () => {
+        isDisposed = true
+      }
+    }
+
+    const timeoutId = window.setTimeout(async () => {
+      const settled = await Promise.allSettled(
+        pendingTargets.map(async (target) => {
+          const payload = await fetchChat({
+            agent: target.backendName,
+            conversationId: target.conversationId,
+            limit: 80,
+          })
+
+          return {
+            ...target,
+            payload,
+          }
+        }),
+      )
+
+      if (isDisposed) {
+        return
+      }
+
+      setConversations((prev) => {
+        const next = { ...prev }
+
+        settled.forEach((result) => {
+          if (result.status !== 'fulfilled') {
+            return
+          }
+
+          const { agentId, conversationId, payload } = result.value
+
+          if (conversationIdsByAgentRef.current[agentId] !== conversationId) {
+            return
+          }
+
+          const normalizedMessageCount = normalizeBackendMessages(payload).length
+          const artifacts = extractNewArtifacts(payload)
+          const runStatus = extractRunStatus(payload)
+
+          if (
+            normalizedMessageCount === 0
+            && (artifacts.length === 0 || runStatus.pending)
+          ) {
+            return
+          }
+
+          next[agentId] = buildConversationFromPayload(
+            agentId,
+            payload,
+            prev[agentId] ?? [],
+            copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+          )
+        })
+
+        return next
+      })
+
+      setRunStatusByAgent((prev) => {
+        const next = { ...prev }
+
+        settled.forEach((result) => {
+          if (result.status !== 'fulfilled') {
+            return
+          }
+
+          const { agentId, conversationId, payload } = result.value
+
+          if (conversationIdsByAgentRef.current[agentId] !== conversationId) {
+            return
+          }
+
+          next[agentId] = extractRunStatus(payload)
+        })
+
+        return next
+      })
+    }, 3000)
+
+    return () => {
+      isDisposed = true
+      window.clearTimeout(timeoutId)
+    }
+  }, [copy.chat.fileReadyResponse, runStatusByAgent, sendingByAgent])
 
   const agents = useMemo(() => {
     const localizedAgents = buildAgents(language)
@@ -1087,10 +1147,7 @@ export default function App() {
       const isFileOnlyAssistantMessage = artifacts.length > 0 && !assistantText && !isStillPending
       const finalAssistantText = isFileOnlyAssistantMessage
         ? copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE
-        : assistantText
-          || (isStillPending
-            ? copy.chat.pendingTimeout
-            : copy.chat.emptyAssistantResponse || DEFAULT_EMPTY_ASSISTANT_RESPONSE)
+        : assistantText || copy.chat.emptyAssistantResponse || DEFAULT_EMPTY_ASSISTANT_RESPONSE
 
       if (
         finalPayload
@@ -1098,26 +1155,14 @@ export default function App() {
       ) {
         setConversations((prev) => ({
           ...prev,
-          [agentId]: isStillPending
-            ? appendAssistantIfNoVisibleResult({
-                messages: buildConversationFromPayload(
-                  agentId,
-                  finalPayload,
-                  prev[agentId] ?? [],
-                  copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
-                ),
-                agentId,
-                text: copy.chat.pendingTimeout,
-                artifacts: [],
-              })
-            : buildConversationFromPayload(
-                agentId,
-                finalPayload,
-                prev[agentId] ?? [],
-                copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
-              ),
+          [agentId]: buildConversationFromPayload(
+            agentId,
+            finalPayload,
+            prev[agentId] ?? [],
+            copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+          ),
         }))
-      } else if (assistantText || artifacts.length > 0 || isStillPending) {
+      } else if (assistantText || artifacts.length > 0 || !isStillPending) {
         setConversations((prev) => ({
           ...prev,
           [agentId]: [
@@ -1139,9 +1184,9 @@ export default function App() {
           ? {
               ...(prev[agentId] ?? {}),
               ...finalRunStatus,
-              state: 'timeout',
-              pending: false,
-              label: copy.chat.pendingTimeout,
+              state: 'running',
+              pending: true,
+              label: copy.chat.runningStatus,
               error: null,
               hasUploads: fileIds.length > 0 || finalRunStatus.hasUploads,
               updatedAt: new Date().toISOString(),
