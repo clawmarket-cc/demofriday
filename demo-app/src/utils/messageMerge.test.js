@@ -91,4 +91,33 @@ describe('appendMissingConversationMessages', () => {
     expect(merged).toHaveLength(2)
     expect(merged[1]).toEqual(secondary[1])
   })
+
+  it('treats attachment-enriched fallback copies as the same text turn', () => {
+    const primary = [
+      {
+        role: 'assistant',
+        text: 'Summary ready',
+        timestamp: '2026-03-06T10:00:00.000Z',
+      },
+    ]
+    const secondary = [
+      {
+        role: 'assistant',
+        text: 'Summary ready',
+        timestamp: '2026-03-06T10:00:01.000Z',
+        artifacts: [
+          {
+            id: 'artifact-1',
+            name: 'summary.txt',
+            size: 128,
+            type: 'text/plain',
+          },
+        ],
+      },
+    ]
+
+    const merged = appendMissingConversationMessages(primary, secondary)
+
+    expect(merged).toEqual(primary)
+  })
 })

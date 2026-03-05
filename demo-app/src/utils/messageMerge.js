@@ -12,8 +12,16 @@ const buildArtifactsSignature = (artifacts = []) =>
 export const buildMessageExactSignature = (message) =>
   `${message?.role ?? ''}|${message?.timestamp ?? ''}|${message?.text ?? ''}|${buildFileSignature(message?.file)}|${buildArtifactsSignature(message?.artifacts)}`
 
-export const buildMessageLooseSignature = (message) =>
-  `${message?.role ?? ''}|${message?.text ?? ''}|${buildFileSignature(message?.file)}|${buildArtifactsSignature(message?.artifacts)}`
+export const buildMessageLooseSignature = (message) => {
+  const role = message?.role ?? ''
+  const text = message?.text ?? ''
+
+  if (typeof text === 'string' && text.trim()) {
+    return `${role}|${text}`
+  }
+
+  return `${role}|${text}|${buildFileSignature(message?.file)}|${buildArtifactsSignature(message?.artifacts)}`
+}
 
 export const appendMissingConversationMessages = (primaryMessages = [], secondaryMessages = []) => {
   const nextMessages = [...primaryMessages]
