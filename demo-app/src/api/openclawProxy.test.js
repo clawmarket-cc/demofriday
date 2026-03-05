@@ -92,6 +92,56 @@ describe('openclawProxy polling', () => {
     expect(result.runStatus.pending).toBe(false)
   })
 
+  it('returns when completion signals appear even if backend pending remains true', async () => {
+    fetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          messages: [{ role: 'user', text: 'Need summary', timestamp: '2026-03-05T09:10:00.000Z' }],
+          pending: true,
+          runStatus: createRunStatus({
+            state: 'running',
+            pending: true,
+            label: 'Waiting for agent output',
+          }),
+          files: {
+            newArtifacts: [],
+            artifacts: [],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          messages: [
+            { role: 'user', text: 'Need summary', timestamp: '2026-03-05T09:10:00.000Z' },
+            { role: 'assistant', text: 'Summary is ready.', timestamp: '2026-03-05T09:10:01.000Z' },
+          ],
+          pending: true,
+          runStatus: createRunStatus({
+            state: 'running',
+            pending: true,
+            label: 'Waiting for agent output',
+          }),
+          files: {
+            newArtifacts: [],
+            artifacts: [],
+          },
+        }),
+      )
+
+    const result = await pollForChatCompletion({
+      agent: 'Excel Analyst',
+      conversationId: 'pending-with-output',
+      previousAssistantCount: 0,
+      pollIntervalMs: 1,
+      timeoutMs: 100,
+      completionSignalGracePolls: 0,
+    })
+
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(result.runStatus.pending).toBe(true)
+    expect(normalizeBackendMessages(result).at(-1)?.text).toBe('Summary is ready.')
+  })
+
   it('normalizes backend messages for UI display', () => {
     const messages = normalizeBackendMessages({
       messages: [

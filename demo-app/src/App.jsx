@@ -17,12 +17,12 @@ import {
   extractNewArtifacts,
   extractRunStatus,
   fetchChat,
+  hasCompletionSignal,
   normalizeBackendMessages,
   pollForChatCompletion,
   postChat,
   uploadFiles,
 } from './api/openclawProxy'
-import { isAwaitingVisibleAgentResult } from './utils/chatFlow'
 import {
   appendMissingConversationMessages,
   buildMessageLooseSignature,
@@ -40,9 +40,110 @@ const DEFAULT_BACKEND_ERROR =
 const DEFAULT_EMPTY_ASSISTANT_RESPONSE = 'The backend completed without returning assistant text.'
 const DEFAULT_FILE_READY_RESPONSE = 'Your generated file is ready.'
 const DEFAULT_UPLOAD_ERROR = 'Upload completed without returning a file id.'
+const DEFAULT_PROCESSING_REQUEST_STATUS = 'Processing request'
+const DEFAULT_GENERATING_WORD_STATUS = 'Generating Word document'
+const DEFAULT_GENERATING_PDF_STATUS = 'Generating PDF'
+const DEFAULT_PREPARING_SPREADSHEET_STATUS = 'Preparing spreadsheet'
+const DEFAULT_BUILDING_PRESENTATION_STATUS = 'Building presentation'
 const CHAT_REQUEST_TIMEOUT_MS = 3000
 const DIRECT_CHAT_RESPONSE_WAIT_MS = 2500
 const POLL_TIMEOUT_MS = 120000
+
+const GENERIC_PENDING_STATUS_HINTS = new Set([
+  'queued',
+  'queueing',
+  'running',
+  'working',
+  'processing',
+  'waiting for agent output',
+  'still processing',
+  'preparing response',
+])
+
+const normalizeStatusLabel = (label) =>
+  typeof label === 'string' ? label.trim().toLowerCase() : ''
+
+const hasWordTaskHint = (content) => /\b(word|docx?|document)\b/.test(content)
+const hasPdfTaskHint = (content) => /\b(pdf)\b/.test(content)
+const hasSpreadsheetTaskHint = (content) =>
+  /\b(excel|spreadsheet|workbook|sheet|xlsx?|csv|table)\b/.test(content)
+const hasPresentationTaskHint = (content) =>
+  /\b(powerpoint|pptx?|presentation|slides?|deck)\b/.test(content)
+
+const inferPendingTaskLabel = (chatCopy, text, file) => {
+  const textContent = typeof text === 'string' ? text.toLowerCase() : ''
+  const fileName = (file?.name ?? '').toLowerCase()
+  const combined = `${textContent} ${fileName}`.trim()
+
+  if (!combined) {
+    return chatCopy.runningStatus || DEFAULT_PROCESSING_REQUEST_STATUS
+  }
+
+  if (hasWordTaskHint(combined)) {
+    return chatCopy.generatingWordStatus || DEFAULT_GENERATING_WORD_STATUS
+  }
+
+  if (hasPdfTaskHint(combined)) {
+    return chatCopy.generatingPdfStatus || DEFAULT_GENERATING_PDF_STATUS
+  }
+
+  if (hasPresentationTaskHint(combined)) {
+    return chatCopy.buildingPresentationStatus || DEFAULT_BUILDING_PRESENTATION_STATUS
+  }
+
+  if (hasSpreadsheetTaskHint(combined)) {
+    return chatCopy.preparingSpreadsheetStatus || DEFAULT_PREPARING_SPREADSHEET_STATUS
+  }
+
+  return chatCopy.runningStatus || DEFAULT_PROCESSING_REQUEST_STATUS
+}
+
+const isGenericPendingStatusLabel = (chatCopy, label) => {
+  const normalizedLabel = normalizeStatusLabel(label)
+
+  if (!normalizedLabel) {
+    return true
+  }
+
+  const localizedGenericLabels = [
+    chatCopy.runningStatus,
+    chatCopy.uploadingStatus,
+    chatCopy.dispatchingStatus,
+  ]
+    .map((value) => normalizeStatusLabel(value))
+    .filter(Boolean)
+
+  if (localizedGenericLabels.includes(normalizedLabel)) {
+    return true
+  }
+
+  return GENERIC_PENDING_STATUS_HINTS.has(normalizedLabel)
+}
+
+const shouldRetainPendingRunStatus = (previousRunStatus, nextRunStatus, payload) => {
+  if (!previousRunStatus?.pending) {
+    return false
+  }
+
+  if (!nextRunStatus || nextRunStatus.pending) {
+    return false
+  }
+
+  if (nextRunStatus.state === 'completed' || nextRunStatus.state === 'error') {
+    return false
+  }
+
+  const startedAtMs = Date.parse(previousRunStatus.startedAt || '')
+
+  if (Number.isFinite(startedAtMs) && Date.now() - startedAtMs > 20000) {
+    return false
+  }
+
+  const hasMessages = normalizeBackendMessages(payload).length > 0
+  const hasArtifacts = extractNewArtifacts(payload).length > 0
+
+  return !hasMessages && !hasArtifacts
+}
 
 const createEmptyConversations = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, []]))
@@ -110,6 +211,9 @@ const createInitialConversations = () => {
 }
 
 const createInitialSendingState = () =>
+  Object.fromEntries(agentDefinitions.map((agent) => [agent.id, false]))
+
+const createInitialClearingState = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, false]))
 
 const createInitialRunStatusState = () =>
@@ -563,15 +667,70 @@ export default function App() {
   const [activeAgentId, setActiveAgentId] = useState(agentDefinitions[0].id)
   const [conversations, setConversations] = useState(createInitialConversations)
   const [sendingByAgent, setSendingByAgent] = useState(createInitialSendingState)
+  const [clearingByAgent, setClearingByAgent] = useState(createInitialClearingState)
   const [runStatusByAgent, setRunStatusByAgent] = useState(createInitialRunStatusState)
   const [conversationIdsByAgent, setConversationIdsByAgent] = useState(createInitialConversationIds)
   const [previewByAgent, setPreviewByAgent] = useState(createInitialPreviewState)
 
   const conversationIdsByAgentRef = useRef(conversationIdsByAgent)
   const conversationsRef = useRef(conversations)
+  const taskStatusLabelByAgentRef = useRef({})
   const copy = translations[language] ?? translations.en
   const copyRef = useRef(copy)
   const getChatCopy = useCallback(() => copyRef.current?.chat ?? translations.en.chat, [])
+  const setTaskStatusLabel = useCallback((agentId, label) => {
+    if (!agentId) {
+      return
+    }
+
+    if (typeof label === 'string' && label.trim()) {
+      taskStatusLabelByAgentRef.current = {
+        ...taskStatusLabelByAgentRef.current,
+        [agentId]: label.trim(),
+      }
+      return
+    }
+
+    if (!(agentId in taskStatusLabelByAgentRef.current)) {
+      return
+    }
+
+    const nextLabels = { ...taskStatusLabelByAgentRef.current }
+    delete nextLabels[agentId]
+    taskStatusLabelByAgentRef.current = nextLabels
+  }, [])
+
+  const resolvePendingRunStatus = useCallback((agentId, runStatus) => {
+    if (!runStatus?.pending || !agentId) {
+      return runStatus
+    }
+
+    if (runStatus.state === 'uploading' || runStatus.state === 'dispatching') {
+      return runStatus
+    }
+
+    const taskLabel = taskStatusLabelByAgentRef.current[agentId]
+
+    if (!taskLabel) {
+      return runStatus
+    }
+
+    const chatCopy = getChatCopy()
+
+    if (!isGenericPendingStatusLabel(chatCopy, runStatus.label)) {
+      return runStatus
+    }
+
+    return {
+      ...runStatus,
+      label: taskLabel,
+    }
+  }, [getChatCopy])
+
+  const extractDisplayRunStatus = useCallback(
+    (agentId, payload) => resolvePendingRunStatus(agentId, extractRunStatus(payload)),
+    [resolvePendingRunStatus],
+  )
 
   useEffect(() => {
     conversationIdsByAgentRef.current = conversationIdsByAgent
@@ -658,7 +817,14 @@ export default function App() {
               return
             }
 
-            next[agentId] = extractRunStatus(payload)
+            const nextRunStatus = extractDisplayRunStatus(agentId, payload)
+
+            next[agentId] = shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, payload)
+              ? {
+                  ...prev[agentId],
+                  updatedAt: new Date().toISOString(),
+                }
+              : nextRunStatus
           })
 
           return next
@@ -675,16 +841,34 @@ export default function App() {
             return
           }
 
-          const runStatus = extractRunStatus(payload)
+          const runStatus = extractDisplayRunStatus(agentId, payload)
           const agent = agentDefinitions.find((candidate) => candidate.id === agentId)
 
           if (!agent || !runStatus.pending) {
             return
           }
 
-          const previousAssistantCount = normalizeBackendMessages(payload).filter(
+          const normalizedMessages = normalizeBackendMessages(payload)
+          const latestUserMessage = [...normalizedMessages]
+            .reverse()
+            .find((message) => message.role === 'user')
+
+          if (!taskStatusLabelByAgentRef.current[agentId] && latestUserMessage?.text) {
+            setTaskStatusLabel(
+              agentId,
+              inferPendingTaskLabel(getChatCopy(), latestUserMessage.text, null),
+            )
+          }
+
+          const previousAssistantCount = normalizedMessages.filter(
             (message) => message.role === 'assistant',
           ).length
+          const knownArtifactSignatures = new Set(
+            normalizedMessages
+              .flatMap((message) => [message.file, ...(message.artifacts ?? [])])
+              .filter(Boolean)
+              .map((artifact) => getUiFileSignature(artifact)),
+          )
 
           setSendingByAgent((prev) => ({
             ...prev,
@@ -697,6 +881,7 @@ export default function App() {
                 agent: agent.backendName,
                 conversationId: nextConversationId,
                 previousAssistantCount,
+                knownArtifactSignatures,
                 timeoutMs: POLL_TIMEOUT_MS,
                 onUpdate: (nextPayload) => {
                   if (isDisposed || !isCurrentConversation(agentId, nextConversationId)) {
@@ -705,7 +890,7 @@ export default function App() {
 
                   const normalizedMessageCount = normalizeBackendMessages(nextPayload).length
                   const artifacts = extractNewArtifacts(nextPayload)
-                  const nextRunStatus = extractRunStatus(nextPayload)
+                  const nextRunStatus = extractDisplayRunStatus(agentId, nextPayload)
 
                   if (
                     normalizedMessageCount > 0 ||
@@ -724,7 +909,18 @@ export default function App() {
 
                   setRunStatusByAgent((prev) => ({
                     ...prev,
-                    [agentId]: extractRunStatus(nextPayload),
+                    [agentId]: (() => {
+                      const nextRunStatus = extractDisplayRunStatus(agentId, nextPayload)
+
+                      if (shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, nextPayload)) {
+                        return {
+                          ...prev[agentId],
+                          updatedAt: new Date().toISOString(),
+                        }
+                      }
+
+                      return nextRunStatus
+                    })(),
                   }))
                 },
               })
@@ -735,7 +931,7 @@ export default function App() {
 
               const assistantText = extractAssistantText(finalPayload, previousAssistantCount)
               const artifacts = extractNewArtifacts(finalPayload)
-              const finalRunStatus = extractRunStatus(finalPayload)
+              const finalRunStatus = extractDisplayRunStatus(agentId, finalPayload)
               const chatCopy = getChatCopy()
 
               if (normalizeBackendMessages(finalPayload).length > 0 || artifacts.length > 0) {
@@ -769,11 +965,18 @@ export default function App() {
                 }))
               }
 
+              const shouldTreatAsCompleted =
+                !finalRunStatus.pending
+                || hasCompletionSignal(
+                  finalPayload,
+                  previousAssistantCount,
+                  knownArtifactSignatures,
+                )
+
               setRunStatusByAgent((prev) => ({
                 ...prev,
-                [agentId]: finalRunStatus.pending
-                  ? finalRunStatus
-                  : {
+                [agentId]: shouldTreatAsCompleted
+                  ? {
                       ...finalRunStatus,
                       state: 'completed',
                       pending: false,
@@ -787,8 +990,13 @@ export default function App() {
                         Number(finalRunStatus.artifactCount ?? 0),
                       ),
                       updatedAt: new Date().toISOString(),
-                    },
+                    }
+                  : finalRunStatus,
               }))
+
+              if (shouldTreatAsCompleted) {
+                setTaskStatusLabel(agentId, '')
+              }
             } catch (error) {
               if (isDisposed || !isCurrentConversation(agentId, nextConversationId)) {
                 return
@@ -805,6 +1013,7 @@ export default function App() {
                   updatedAt: new Date().toISOString(),
                 },
               }))
+              setTaskStatusLabel(agentId, '')
             } finally {
               if (!isDisposed && isCurrentConversation(agentId, nextConversationId)) {
                 setSendingByAgent((prev) => ({
@@ -825,7 +1034,7 @@ export default function App() {
     return () => {
       isDisposed = true
     }
-  }, [getChatCopy])
+  }, [extractDisplayRunStatus, getChatCopy, setTaskStatusLabel])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -885,7 +1094,7 @@ export default function App() {
 
           const normalizedMessageCount = normalizeBackendMessages(payload).length
           const artifacts = extractNewArtifacts(payload)
-          const runStatus = extractRunStatus(payload)
+          const runStatus = extractDisplayRunStatus(agentId, payload)
 
           if (
             normalizedMessageCount === 0
@@ -919,10 +1128,40 @@ export default function App() {
             return
           }
 
-          next[agentId] = extractRunStatus(payload)
+          const nextRunStatus = extractDisplayRunStatus(agentId, payload)
+
+          next[agentId] = shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, payload)
+            ? {
+                ...prev[agentId],
+                updatedAt: new Date().toISOString(),
+              }
+            : nextRunStatus
         })
 
         return next
+      })
+
+      settled.forEach((result) => {
+        if (result.status !== 'fulfilled') {
+          return
+        }
+
+        const { agentId, conversationId, payload } = result.value
+
+        if (conversationIdsByAgentRef.current[agentId] !== conversationId) {
+          return
+        }
+
+        const nextRunStatus = extractDisplayRunStatus(agentId, payload)
+        const retainedPending = shouldRetainPendingRunStatus(
+          runStatusByAgent[agentId],
+          nextRunStatus,
+          payload,
+        )
+
+        if (!nextRunStatus.pending && !retainedPending) {
+          setTaskStatusLabel(agentId, '')
+        }
       })
     }, 3000)
 
@@ -930,22 +1169,19 @@ export default function App() {
       isDisposed = true
       window.clearTimeout(timeoutId)
     }
-  }, [getChatCopy, runStatusByAgent, sendingByAgent])
+  }, [extractDisplayRunStatus, getChatCopy, runStatusByAgent, sendingByAgent, setTaskStatusLabel])
 
   const agents = useMemo(() => {
     const localizedAgents = buildAgents(language)
 
     return localizedAgents.map((agent) => ({
       ...agent,
-      status: isAwaitingVisibleAgentResult({
-        messages: conversations[agent.id] ?? [],
-        isSending: sendingByAgent[agent.id],
-        runStatus: runStatusByAgent[agent.id],
-      })
-        ? 'busy'
-        : agent.status,
+      status:
+        sendingByAgent[agent.id] || runStatusByAgent[agent.id]?.pending
+          ? 'busy'
+          : agent.status,
     }))
-  }, [conversations, language, runStatusByAgent, sendingByAgent])
+  }, [language, runStatusByAgent, sendingByAgent])
 
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) ?? agents[0]
   const activePreview = previewByAgent[activeAgentId]
@@ -970,7 +1206,7 @@ export default function App() {
   }
 
   const handleClearHistory = async (agentId) => {
-    if (!agentId || sendingByAgent[agentId]) {
+    if (!agentId || sendingByAgent[agentId] || clearingByAgent[agentId]) {
       return
     }
 
@@ -982,7 +1218,7 @@ export default function App() {
 
     const conversationId = conversationIdsByAgentRef.current[agentId]
 
-    setSendingByAgent((prev) => ({
+    setClearingByAgent((prev) => ({
       ...prev,
       [agentId]: true,
     }))
@@ -1009,6 +1245,7 @@ export default function App() {
       }))
 
       setConversationIdsByAgent((prev) => rotateConversationId(prev, agentId))
+      setTaskStatusLabel(agentId, '')
     } catch (error) {
       const chatCopy = getChatCopy()
       const message =
@@ -1040,7 +1277,7 @@ export default function App() {
         },
       }))
     } finally {
-      setSendingByAgent((prev) => ({
+      setClearingByAgent((prev) => ({
         ...prev,
         [agentId]: false,
       }))
@@ -1075,7 +1312,7 @@ export default function App() {
     const conversationId = conversationIdsByAgentRef.current[agentId]
     const isCurrentConversation = () => conversationIdsByAgentRef.current[agentId] === conversationId
 
-    if (!agent || !conversationId || sendingByAgent[agentId]) {
+    if (!agent || !conversationId || sendingByAgent[agentId] || clearingByAgent[agentId]) {
       return
     }
 
@@ -1110,8 +1347,16 @@ export default function App() {
 
     try {
       const chatCopyAtStart = getChatCopy()
+      const inferredTaskStatusLabel = inferPendingTaskLabel(chatCopyAtStart, trimmedText, file)
+      setTaskStatusLabel(agentId, inferredTaskStatusLabel)
       const existingMessages = conversationsRef.current[agentId] ?? []
       const previousAssistantCount = existingMessages.filter((message) => message.role === 'assistant').length
+      const knownArtifactSignatures = new Set(
+        existingMessages
+          .flatMap((message) => [message.file, ...(message.artifacts ?? [])])
+          .filter(Boolean)
+          .map((artifact) => getUiFileSignature(artifact)),
+      )
       const clientMessageCount = existingMessages.length
       const clientLastAssistantText = getLastAssistantMessageText(existingMessages)
       let fileIds = []
@@ -1219,13 +1464,23 @@ export default function App() {
       let finalPayload = directResult.response
       let assistantText = finalPayload ? extractAssistantText(finalPayload, previousAssistantCount) : ''
       let artifacts = finalPayload ? extractNewArtifacts(finalPayload) : []
+      const directRunStatus = finalPayload ? extractDisplayRunStatus(agentId, finalPayload) : null
 
       if (finalPayload) {
         if (isCurrentConversation()) {
-          setRunStatusByAgent((prev) => ({
-            ...prev,
-            [agentId]: extractRunStatus(finalPayload),
-          }))
+          setRunStatusByAgent((prev) => {
+            const nextRunStatus = directRunStatus
+
+            return {
+              ...prev,
+              [agentId]: shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, finalPayload)
+                ? {
+                    ...prev[agentId],
+                    updatedAt: new Date().toISOString(),
+                  }
+                : nextRunStatus,
+            }
+          })
         }
       } else {
         if (isCurrentConversation()) {
@@ -1235,18 +1490,19 @@ export default function App() {
               ...(prev[agentId] ?? {}),
               state: 'running',
               pending: true,
-              label: getChatCopy().runningStatus,
+              label: taskStatusLabelByAgentRef.current[agentId] || getChatCopy().runningStatus,
               updatedAt: new Date().toISOString(),
             },
           }))
         }
       }
 
-      if (!assistantText || extractRunStatus(finalPayload).pending) {
+      if (!assistantText || directRunStatus?.pending) {
         const polledPayload = await pollForChatCompletion({
           agent: agent.backendName,
           conversationId,
           previousAssistantCount,
+          knownArtifactSignatures,
           timeoutMs: POLL_TIMEOUT_MS,
           onUpdate: (payload) => {
             if (!isCurrentConversation()) {
@@ -1255,11 +1511,17 @@ export default function App() {
 
             const normalizedMessageCount = normalizeBackendMessages(payload).length
             const artifacts = extractNewArtifacts(payload)
-            const runStatus = extractRunStatus(payload)
+            const runStatus = extractDisplayRunStatus(agentId, payload)
+            const hasAssistantTextUpdate = Boolean(
+              extractAssistantText(payload, previousAssistantCount),
+            )
             const hasNewMessages = normalizedMessageCount > clientMessageCount
-            const shouldRenderArtifacts = artifacts.length > 0 && (hasNewMessages || !runStatus.pending)
+            const shouldRenderMessages =
+              hasNewMessages && (hasAssistantTextUpdate || runStatus.pending === false)
+            const shouldRenderArtifacts =
+              artifacts.length > 0 && (runStatus.pending === false || hasAssistantTextUpdate)
 
-            if (hasNewMessages || shouldRenderArtifacts) {
+            if (shouldRenderMessages || shouldRenderArtifacts) {
               setConversations((prev) => ({
                 ...prev,
                 [agentId]: buildConversationFromPayload(
@@ -1271,10 +1533,19 @@ export default function App() {
               }))
             }
 
-            setRunStatusByAgent((prev) => ({
-              ...prev,
-              [agentId]: extractRunStatus(payload),
-            }))
+            setRunStatusByAgent((prev) => {
+              const nextRunStatus = extractDisplayRunStatus(agentId, payload)
+
+              return {
+                ...prev,
+                [agentId]: shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, payload)
+                  ? {
+                      ...prev[agentId],
+                      updatedAt: new Date().toISOString(),
+                    }
+                  : nextRunStatus,
+              }
+            })
           },
         })
 
@@ -1284,10 +1555,19 @@ export default function App() {
           artifacts = extractNewArtifacts(polledPayload)
 
           if (isCurrentConversation()) {
-            setRunStatusByAgent((prev) => ({
-              ...prev,
-              [agentId]: extractRunStatus(polledPayload),
-            }))
+            setRunStatusByAgent((prev) => {
+              const nextRunStatus = extractDisplayRunStatus(agentId, polledPayload)
+
+              return {
+                ...prev,
+                [agentId]: shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, polledPayload)
+                  ? {
+                      ...prev[agentId],
+                      updatedAt: new Date().toISOString(),
+                    }
+                  : nextRunStatus,
+              }
+            })
           }
         }
       }
@@ -1296,8 +1576,12 @@ export default function App() {
         return
       }
 
-      const finalRunStatus = extractRunStatus(finalPayload)
-      const isStillPending = !finalPayload || finalRunStatus.pending
+      const finalRunStatus = finalPayload ? extractDisplayRunStatus(agentId, finalPayload) : null
+      const runHasCompletionSignal = finalPayload
+        ? hasCompletionSignal(finalPayload, previousAssistantCount, knownArtifactSignatures)
+        : false
+      const isStillPending =
+        !finalPayload || (Boolean(finalRunStatus?.pending) && !runHasCompletionSignal)
       const isFileOnlyAssistantMessage = artifacts.length > 0 && !assistantText && !isStillPending
       const chatCopy = getChatCopy()
       const finalAssistantText = isFileOnlyAssistantMessage
@@ -1336,16 +1620,19 @@ export default function App() {
       setRunStatusByAgent((prev) => ({
         ...prev,
         [agentId]: isStillPending
-          ? {
+          ? resolvePendingRunStatus(agentId, {
               ...(prev[agentId] ?? {}),
               ...finalRunStatus,
               state: 'running',
               pending: true,
-              label: chatCopy.runningStatus,
+              label:
+                taskStatusLabelByAgentRef.current[agentId]
+                || finalRunStatus?.label
+                || chatCopy.runningStatus,
               error: null,
-              hasUploads: fileIds.length > 0 || finalRunStatus.hasUploads,
+              hasUploads: fileIds.length > 0 || finalRunStatus?.hasUploads,
               updatedAt: new Date().toISOString(),
-            }
+            })
           : {
               ...finalRunStatus,
               state: 'completed',
@@ -1353,11 +1640,15 @@ export default function App() {
               label:
                 artifacts.length > 0 ? chatCopy.completedWithFilesStatus : chatCopy.completedStatus,
               error: null,
-              artifactCount: Math.max(artifacts.length, Number(finalRunStatus.artifactCount ?? 0)),
-              hasUploads: fileIds.length > 0 || finalRunStatus.hasUploads,
+              artifactCount: Math.max(artifacts.length, Number(finalRunStatus?.artifactCount ?? 0)),
+              hasUploads: fileIds.length > 0 || finalRunStatus?.hasUploads,
               updatedAt: new Date().toISOString(),
             },
       }))
+
+      if (!isStillPending) {
+        setTaskStatusLabel(agentId, '')
+      }
     } catch (error) {
       const chatCopy = getChatCopy()
       const message =
@@ -1388,6 +1679,7 @@ export default function App() {
           updatedAt: new Date().toISOString(),
         },
       }))
+      setTaskStatusLabel(agentId, '')
     } finally {
       setSendingByAgent((prev) => ({
         ...prev,
@@ -1420,6 +1712,7 @@ export default function App() {
             onClearHistory={() => handleClearHistory(activeAgent.id)}
             onPreviewFile={(file) => handlePreviewFile(activeAgent.id, file)}
             isSending={sendingByAgent[activeAgent.id]}
+            isClearing={clearingByAgent[activeAgent.id]}
             runStatus={runStatusByAgent[activeAgent.id]}
             text={copy.chat}
             statusLabels={copy.status}

@@ -170,11 +170,14 @@ const normalizeFileRecords = (files, fallbackName) => {
   return files.map((file) => normalizeFileRecord(file, fallbackName)).filter(Boolean)
 }
 
+const buildFileSignature = (file) =>
+  file?.id || file?.downloadUrl || `${file?.name ?? ''}-${file?.size ?? ''}-${file?.type ?? ''}`
+
 const dedupeFiles = (files = []) => {
   const seen = new Set()
 
   return files.filter((file) => {
-    const key = file.id || file.downloadUrl || `${file.name}-${file.size}-${file.type}`
+    const key = buildFileSignature(file)
 
     if (seen.has(key)) {
       return false
@@ -358,6 +361,23 @@ export const normalizeBackendMessages = (payload) => {
 export const countAssistantMessages = (payload) =>
   normalizeBackendMessages(payload).filter((message) => message.role === 'assistant').length
 
+export const hasCompletionSignal = (
+  payload,
+  previousAssistantCount = 0,
+  knownArtifactSignatures = new Set(),
+) => {
+  const assistantCount = countAssistantMessages(payload)
+  const assistantText = extractAssistantText(payload, previousAssistantCount)
+  const artifacts = extractNewArtifacts(payload)
+  const signatureSet =
+    knownArtifactSignatures instanceof Set
+      ? knownArtifactSignatures
+      : new Set(Array.isArray(knownArtifactSignatures) ? knownArtifactSignatures : [])
+  const hasNewArtifact = artifacts.some((artifact) => !signatureSet.has(buildFileSignature(artifact)))
+
+  return assistantCount > previousAssistantCount || Boolean(assistantText) || hasNewArtifact
+}
+
 export const extractAssistantText = (payload, previousAssistantCount = 0) => {
   const normalized = normalizeBackendMessages(payload)
   const assistants = normalized.filter((message) => message.role === 'assistant')
@@ -453,23 +473,31 @@ export const pollForChatCompletion = async ({
   agentId,
   conversationId,
   previousAssistantCount,
+  knownArtifactSignatures = new Set(),
   timeoutMs = 60000,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   completionGracePolls = 2,
+  completionSignalGracePolls = 1,
   onUpdate,
 }) => {
   const deadline = Date.now() + timeoutMs
   let lastPayload = null
   let remainingCompletionGracePolls = Math.max(0, completionGracePolls)
+  let remainingCompletionSignalGracePolls = Math.max(0, completionSignalGracePolls)
 
   while (Date.now() < deadline) {
     const payload = await fetchChat({ agent: agent ?? agentId, conversationId, limit: 200 })
     lastPayload = payload
     onUpdate?.(payload)
 
-    const assistantText = extractAssistantText(payload, previousAssistantCount)
     const runStatus = extractRunStatus(payload)
+    const assistantText = extractAssistantText(payload, previousAssistantCount)
     const artifacts = extractNewArtifacts(payload)
+    const completionSignal = hasCompletionSignal(
+      payload,
+      previousAssistantCount,
+      knownArtifactSignatures,
+    )
 
     if (runStatus.state === 'error') {
       throw new Error(runStatus.error || 'The backend run failed.')
@@ -485,6 +513,17 @@ export const pollForChatCompletion = async ({
       continue
     }
 
+    if (completionSignal) {
+      if (remainingCompletionSignalGracePolls === 0) {
+        return payload
+      }
+
+      remainingCompletionSignalGracePolls -= 1
+      await delay(pollIntervalMs)
+      continue
+    }
+
+    remainingCompletionSignalGracePolls = Math.max(0, completionSignalGracePolls)
     await delay(pollIntervalMs)
   }
 
