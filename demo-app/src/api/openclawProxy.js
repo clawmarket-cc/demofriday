@@ -4,6 +4,20 @@ const DEFAULT_POLL_INTERVAL_MS = 1500
 const trimTrailingSlashes = (value) => value.replace(/\/+$/, '')
 const isFormData = (value) => typeof FormData !== 'undefined' && value instanceof FormData
 
+const stripInvalidJsonControlChars = (value) => {
+  let sanitized = ''
+
+  for (const char of value) {
+    const code = char.charCodeAt(0)
+
+    if (code >= 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
+      sanitized += char
+    }
+  }
+
+  return sanitized
+}
+
 const stripFinalEnvelope = (value) => {
   if (typeof value !== 'string') {
     return ''
@@ -18,6 +32,11 @@ const stripFinalEnvelope = (value) => {
 
   return trimmed
 }
+
+const stripUiFileContextBlock = (value) =>
+  typeof value === 'string'
+    ? value.replace(/\n*\[UI_FILE_CONTEXT\][\s\S]*?\[\/UI_FILE_CONTEXT\]\s*$/i, '').trim()
+    : ''
 
 export const apiBaseUrl = trimTrailingSlashes(
   import.meta.env.VITE_API_BASE_URL?.trim() || DEFAULT_API_BASE_URL,
@@ -48,7 +67,12 @@ const readJson = async (response) => {
   try {
     return JSON.parse(raw)
   } catch {
-    throw new Error('Backend returned invalid JSON.')
+    try {
+      const sanitizedRaw = stripInvalidJsonControlChars(raw)
+      return JSON.parse(sanitizedRaw)
+    } catch {
+      throw new Error('Backend returned invalid JSON.')
+    }
   }
 }
 
@@ -83,6 +107,15 @@ export const fetchAgentLanes = async () => requestJson('/agents')
 export const fetchChat = async ({ agent, agentId, conversationId, limit = 80 }) =>
   requestJson('/chat', {}, { agent: agent ?? agentId, conversationId, limit })
 
+export const clearChat = async ({ agent, agentId, conversationId }) =>
+  requestJson(
+    '/chat',
+    {
+      method: 'DELETE',
+    },
+    { agent: agent ?? agentId, conversationId },
+  )
+
 const resolveDownloadUrl = (downloadUrl, fileId) => {
   if (typeof downloadUrl === 'string' && downloadUrl.trim()) {
     if (/^https?:\/\//i.test(downloadUrl)) {
@@ -111,8 +144,8 @@ const normalizeFileRecord = (file, fallbackName = 'Generated file') => {
   const id = file.id ?? file.fileId ?? file._id ?? ''
   const name =
     file.name ?? file.fileName ?? file.filename ?? file.originalName ?? file.originalFilename ?? fallbackName
-  const size = Number(file.size ?? file.bytes ?? file.byteSize ?? 0)
-  const type = file.type ?? file.mimeType ?? file.mimetype ?? ''
+  const size = Number(file.size ?? file.sizeBytes ?? file.bytes ?? file.byteSize ?? file.contentLength ?? 0)
+  const type = file.type ?? file.mimeType ?? file.mimetype ?? file.contentType ?? ''
 
   return {
     id,
@@ -165,6 +198,8 @@ export const postChat = async ({
   fileIds = [],
   thinking,
   timeoutMs,
+  clientMessageCount,
+  clientLastAssistantText,
 }) =>
   requestJson('/chat', {
     method: 'POST',
@@ -175,6 +210,10 @@ export const postChat = async ({
       fileIds,
       ...(thinking ? { thinking } : {}),
       ...(timeoutMs ? { timeoutMs } : {}),
+      ...(Number.isFinite(clientMessageCount) ? { clientMessageCount } : {}),
+      ...(typeof clientLastAssistantText === 'string' && clientLastAssistantText.trim()
+        ? { clientLastAssistantText }
+        : {}),
     }),
   })
 
@@ -212,14 +251,14 @@ const messageToText = (message) => {
   }
 
   if (typeof message.text === 'string') {
-    return stripFinalEnvelope(message.text)
+    return stripUiFileContextBlock(stripFinalEnvelope(message.text))
   }
 
   if (typeof message.message === 'string') {
-    return stripFinalEnvelope(message.message)
+    return stripUiFileContextBlock(stripFinalEnvelope(message.message))
   }
 
-  return messageContentToText(message.content)
+  return stripUiFileContextBlock(messageContentToText(message.content))
 }
 
 export const normalizeBackendMessages = (payload) => {
@@ -264,6 +303,33 @@ export const extractAssistantText = (payload, previousAssistantCount = 0) => {
 export const extractArtifacts = (payload) =>
   normalizeFileRecords(payload?.files?.artifacts, 'Generated file')
 
+export const extractNewArtifacts = (payload) => {
+  const newArtifacts = normalizeFileRecords(payload?.files?.newArtifacts, 'Generated file')
+  if (newArtifacts.length > 0) {
+    return newArtifacts
+  }
+
+  return extractArtifacts(payload)
+}
+
+export const extractRunStatus = (payload) => {
+  if (payload?.runStatus && typeof payload.runStatus === 'object') {
+    return payload.runStatus
+  }
+
+  return {
+    state: payload?.pending ? 'running' : 'idle',
+    pending: Boolean(payload?.pending),
+    label: payload?.pending ? 'Running' : 'Idle',
+    startedAt: null,
+    updatedAt: null,
+    runId: payload?.run?.runId ?? null,
+    error: null,
+    artifactCount: extractArtifacts(payload).length,
+    hasUploads: Array.isArray(payload?.files?.requested) && payload.files.requested.length > 0,
+  }
+}
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export const pollForAssistantReply = async ({
@@ -277,14 +343,61 @@ export const pollForAssistantReply = async ({
   const deadline = Date.now() + timeoutMs
 
   while (Date.now() < deadline) {
-    await delay(pollIntervalMs)
     const payload = await fetchChat({ agent: agent ?? agentId, conversationId, limit: 200 })
     const assistantText = extractAssistantText(payload, previousAssistantCount)
 
     if (assistantText) {
       return assistantText
     }
+
+    await delay(pollIntervalMs)
   }
 
   return ''
+}
+
+export const pollForChatCompletion = async ({
+  agent,
+  agentId,
+  conversationId,
+  previousAssistantCount,
+  timeoutMs = 60000,
+  pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+  completionGracePolls = 2,
+  onUpdate,
+}) => {
+  const deadline = Date.now() + timeoutMs
+  let lastPayload = null
+  let remainingCompletionGracePolls = Math.max(0, completionGracePolls)
+
+  while (Date.now() < deadline) {
+    const payload = await fetchChat({ agent: agent ?? agentId, conversationId, limit: 200 })
+    lastPayload = payload
+    onUpdate?.(payload)
+
+    const assistantText = extractAssistantText(payload, previousAssistantCount)
+    const runStatus = extractRunStatus(payload)
+    const artifacts = extractNewArtifacts(payload)
+
+    if (runStatus.state === 'error') {
+      throw new Error(runStatus.error || 'The backend run failed.')
+    }
+
+    if (runStatus.pending === false) {
+      if (artifacts.length > 0 || remainingCompletionGracePolls === 0) {
+        return payload
+      }
+
+      remainingCompletionGracePolls -= 1
+      continue
+    }
+
+    if (assistantText) {
+      return payload
+    }
+
+    await delay(pollIntervalMs)
+  }
+
+  return lastPayload
 }
