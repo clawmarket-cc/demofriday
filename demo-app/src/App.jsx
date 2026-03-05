@@ -21,6 +21,7 @@ import {
   postChat,
   uploadFiles,
 } from './api/openclawProxy'
+import { isAwaitingVisibleAgentResult } from './utils/chatFlow'
 
 const STORAGE_CLIENT_ID_KEY = 'golemforce-chat-client-id'
 const STORAGE_CONVERSATION_IDS_KEY = 'golemforce-chat-conversation-ids'
@@ -253,8 +254,8 @@ const attachArtifactsToLatestAssistant = (messages, artifacts) => {
   return nextMessages
 }
 
-const buildConversationFromPayload = (agentId, payload) => {
-  const messages = normalizeBackendMessages(payload).map((message, index) =>
+const buildConversationFromPayload = (agentId, payload, fallbackMessages = []) => {
+  const normalizedMessages = normalizeBackendMessages(payload).map((message, index) =>
     toUiMessage({
       agentId,
       role: message.role,
@@ -263,6 +264,7 @@ const buildConversationFromPayload = (agentId, payload) => {
       id: `${agentId}-${message.timestamp || 'no-ts'}-${index}`,
     }),
   )
+  const messages = normalizedMessages.length > 0 ? normalizedMessages : [...fallbackMessages]
   const artifacts = extractNewArtifacts(payload)
   const withArtifacts = attachArtifactsToLatestAssistant(messages, artifacts)
 
@@ -343,7 +345,7 @@ export default function App() {
               return
             }
 
-            next[agentId] = buildConversationFromPayload(agentId, payload)
+            next[agentId] = buildConversationFromPayload(agentId, payload, prev[agentId] ?? [])
           })
 
           return next
@@ -414,7 +416,7 @@ export default function App() {
                   ) {
                     setConversations((prev) => ({
                       ...prev,
-                      [agentId]: buildConversationFromPayload(agentId, nextPayload),
+                      [agentId]: buildConversationFromPayload(agentId, nextPayload, prev[agentId] ?? []),
                     }))
                   }
 
@@ -436,7 +438,7 @@ export default function App() {
               if (normalizeBackendMessages(finalPayload).length > 0 || artifacts.length > 0) {
                 setConversations((prev) => ({
                   ...prev,
-                  [agentId]: buildConversationFromPayload(agentId, finalPayload),
+                  [agentId]: buildConversationFromPayload(agentId, finalPayload, prev[agentId] ?? []),
                 }))
               } else if (assistantText || artifacts.length > 0) {
                 setConversations((prev) => ({
@@ -525,10 +527,15 @@ export default function App() {
 
     return localizedAgents.map((agent) => ({
       ...agent,
-      status:
-        sendingByAgent[agent.id] || runStatusByAgent[agent.id]?.pending ? 'busy' : agent.status,
+      status: isAwaitingVisibleAgentResult({
+        messages: conversations[agent.id] ?? [],
+        isSending: sendingByAgent[agent.id],
+        runStatus: runStatusByAgent[agent.id],
+      })
+        ? 'busy'
+        : agent.status,
     }))
-  }, [language, runStatusByAgent, sendingByAgent])
+  }, [conversations, language, runStatusByAgent, sendingByAgent])
 
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) ?? agents[0]
 
@@ -793,7 +800,7 @@ export default function App() {
             ) {
               setConversations((prev) => ({
                 ...prev,
-                [agentId]: buildConversationFromPayload(agentId, payload),
+                [agentId]: buildConversationFromPayload(agentId, payload, prev[agentId] ?? []),
               }))
             }
 
@@ -838,7 +845,7 @@ export default function App() {
       ) {
         setConversations((prev) => ({
           ...prev,
-          [agentId]: buildConversationFromPayload(agentId, finalPayload),
+          [agentId]: buildConversationFromPayload(agentId, finalPayload, prev[agentId] ?? []),
         }))
       } else if (assistantText || artifacts.length > 0 || isStillPending) {
         setConversations((prev) => ({

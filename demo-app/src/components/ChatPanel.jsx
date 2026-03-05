@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import MessageBubble from './MessageBubble'
+import { isAwaitingVisibleAgentResult } from '../utils/chatFlow'
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 const MAX_FILE_SIZE_LABEL = '25 MB'
@@ -186,7 +187,9 @@ export default function ChatPanel({
 
   const hasUserMessages = messages.some((message) => message.role === 'user')
   const hasMessages = messages.length > 0
-  const activeRunStatus = runStatus?.pending ? runStatus : null
+  const activeRunStatus = isAwaitingVisibleAgentResult({ messages, isSending, runStatus })
+    ? runStatus
+    : null
   const isTyping = Boolean(activeRunStatus)
   const { color: statusColor, label: statusLabel } = getStatusMeta(agent.status, labels)
   const hints = Array.isArray(agent.hints) && agent.hints.length > 0 ? agent.hints : copy.hints

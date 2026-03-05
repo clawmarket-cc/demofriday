@@ -384,16 +384,13 @@ export const pollForChatCompletion = async ({
     }
 
     if (runStatus.pending === false) {
-      if (artifacts.length > 0 || remainingCompletionGracePolls === 0) {
+      if (assistantText || artifacts.length > 0 || remainingCompletionGracePolls === 0) {
         return payload
       }
 
       remainingCompletionGracePolls -= 1
+      await delay(pollIntervalMs)
       continue
-    }
-
-    if (assistantText) {
-      return payload
     }
 
     await delay(pollIntervalMs)
