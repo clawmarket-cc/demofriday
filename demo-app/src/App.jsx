@@ -9,6 +9,7 @@ const agents = [
     description: 'Analyze spreadsheets, generate reports, transform data',
     color: '#22c55e',
     icon: 'XLS',
+    status: 'online',
     greeting: "Hey! I'm your Excel Agent. I can help you analyze spreadsheets, generate pivot tables, clean data, create formulas, and build reports. Drop a file or tell me what you need.",
   },
   {
@@ -17,6 +18,7 @@ const agents = [
     description: 'Extract data, summarize documents, answer questions',
     color: '#ef4444',
     icon: 'PDF',
+    status: 'online',
     greeting: "Hi there! I'm your PDF Agent. I can extract information from PDFs, summarize documents, answer questions about contracts, and pull structured data from any document. What can I help with?",
   },
 ]
@@ -87,18 +89,20 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen" style={{ backgroundColor: '#EDE8DF', padding: '12px' }}>
-      <Sidebar
-        agents={agents}
-        activeAgent={activeAgent}
-        onSelect={setActiveAgent}
-        conversations={conversations}
-      />
-      <ChatPanel
-        agent={activeAgent}
-        messages={conversations[activeAgent.id]}
-        onSend={handleSend}
-      />
+    <div className="app-shell">
+      <main className="workspace-grid" aria-label="Agent workspace">
+        <Sidebar
+          agents={agents}
+          activeAgent={activeAgent}
+          onSelect={setActiveAgent}
+          conversations={conversations}
+        />
+        <ChatPanel
+          agent={activeAgent}
+          messages={conversations[activeAgent.id]}
+          onSend={handleSend}
+        />
+      </main>
     </div>
   )
 }
