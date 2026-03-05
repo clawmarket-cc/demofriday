@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
+import { parseDocumentPreview, parsePresentationPreview } from '../utils/officePreview'
 import {
   formatFileSize,
   getAttachmentLabel,
   getPreviewKind,
+  supportsStructuredDocumentPreview,
+  supportsStructuredPresentationPreview,
 } from '../utils/filePreview'
 
 const MAX_PREVIEW_ROWS = 30
@@ -32,8 +35,16 @@ const defaultPreviewText = {
   previewRowsLabel: 'Rows',
   previewColumnsLabel: 'Columns',
   previewSheetsLabel: 'Sheets',
+  previewSlidesLabel: 'Slides',
+  previewParagraphsLabel: 'Paragraphs',
+  previewWordsLabel: 'Words',
   previewSheetEmpty: 'This sheet is empty.',
+  previewDocumentEmpty: 'This document does not contain extractable text.',
+  previewPresentationEmpty: 'This presentation does not contain extractable text.',
+  previewSlideEmpty: 'This slide does not contain extractable text.',
   previewSheetTabsAria: 'Workbook sheets',
+  previewSlideTabsAria: 'Presentation slides',
+  previewSlideLabel: 'Slide {index}',
   previewTableTruncated: 'Showing the first {rows} rows and {columns} columns.',
   previewDetailsTitle: 'File details',
 }
@@ -46,6 +57,30 @@ const createInitialSpreadsheetState = () => ({
   sheets: [],
   error: '',
 })
+
+const createInitialDocumentState = () => ({
+  status: 'idle',
+  blocks: [],
+  paragraphCount: 0,
+  wordCount: 0,
+  error: '',
+})
+
+const createInitialPresentationState = () => ({
+  status: 'idle',
+  slides: [],
+  error: '',
+})
+
+const loadBinaryFile = async (downloadUrl, signal) => {
+  const response = await fetch(downloadUrl, { signal })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+
+  return response.arrayBuffer()
+}
 
 const getSourceLabel = (copy, source) => {
   if (source === 'artifact') {
@@ -77,6 +112,19 @@ const getSheetMetrics = (rows) => {
   }
 }
 
+const getSlideTitle = (copy, slide) =>
+  slide?.title || interpolate(copy.previewSlideLabel, { index: slide?.index ?? 1 })
+
+const getSlideTabLabel = (copy, slide) => {
+  const title = getSlideTitle(copy, slide)
+
+  if (title.length <= 22) {
+    return title
+  }
+
+  return `${title.slice(0, 19).trimEnd()}...`
+}
+
 const PreviewValue = ({ label, value }) => (
   <div className="preview-detail-card">
     <span className="preview-detail-label">{label}</span>
@@ -99,13 +147,8 @@ const DownloadIcon = () => (
   </svg>
 )
 
-const SpreadsheetPreview = ({
-  copy,
-  spreadsheetState,
-  activeSheetName,
-  onSelectSheet,
-}) => {
-  if (spreadsheetState.status === 'loading') {
+const AsyncPreviewState = ({ copy, state, emptyMessage }) => {
+  if (state.status === 'loading') {
     return (
       <div className="preview-state-card is-loading">
         <span className="preview-state-spinner" aria-hidden="true" />
@@ -114,12 +157,35 @@ const SpreadsheetPreview = ({
     )
   }
 
-  if (spreadsheetState.status === 'error') {
+  if (state.status === 'error') {
     return (
       <div className="preview-state-card is-error">
         <p>{copy.previewLoadError}</p>
-        {spreadsheetState.error ? <span>{spreadsheetState.error}</span> : null}
+        {state.error ? <span>{state.error}</span> : null}
       </div>
+    )
+  }
+
+  return (
+    <div className="preview-state-card">
+      <p>{emptyMessage}</p>
+    </div>
+  )
+}
+
+const SpreadsheetPreview = ({
+  copy,
+  spreadsheetState,
+  activeSheetName,
+  onSelectSheet,
+}) => {
+  if (spreadsheetState.status !== 'ready') {
+    return (
+      <AsyncPreviewState
+        copy={copy}
+        state={spreadsheetState}
+        emptyMessage={copy.previewInlineUnavailable}
+      />
     )
   }
 
@@ -127,9 +193,11 @@ const SpreadsheetPreview = ({
 
   if (sheets.length === 0) {
     return (
-      <div className="preview-state-card">
-        <p>{copy.previewInlineUnavailable}</p>
-      </div>
+      <AsyncPreviewState
+        copy={copy}
+        state={spreadsheetState}
+        emptyMessage={copy.previewInlineUnavailable}
+      />
     )
   }
 
@@ -217,32 +285,158 @@ const SpreadsheetPreview = ({
   )
 }
 
+const DocumentPreview = ({ copy, documentState }) => {
+  if (documentState.status !== 'ready') {
+    return (
+      <AsyncPreviewState
+        copy={copy}
+        state={documentState}
+        emptyMessage={copy.previewInlineUnavailable}
+      />
+    )
+  }
+
+  if (documentState.blocks.length === 0) {
+    return (
+      <AsyncPreviewState
+        copy={copy}
+        state={documentState}
+        emptyMessage={copy.previewDocumentEmpty}
+      />
+    )
+  }
+
+  return (
+    <div className="preview-document">
+      <div className="preview-document-stats" aria-hidden="true">
+        <span>{copy.previewParagraphsLabel}: {documentState.paragraphCount}</span>
+        <span>{copy.previewWordsLabel}: {documentState.wordCount}</span>
+      </div>
+
+      <div className="preview-document-shell">
+        <article className="preview-document-body">
+          {documentState.blocks.map((block) =>
+            block.kind === 'heading' ? (
+              <h4
+                key={block.id}
+                className={`preview-document-heading ${block.level > 1 ? 'is-subheading' : ''}`}
+              >
+                {block.text}
+              </h4>
+            ) : (
+              <p key={block.id} className="preview-document-paragraph">
+                {block.text}
+              </p>
+            ),
+          )}
+        </article>
+      </div>
+    </div>
+  )
+}
+
+const PresentationPreview = ({
+  copy,
+  presentationState,
+  activeSlideId,
+  onSelectSlide,
+}) => {
+  if (presentationState.status !== 'ready') {
+    return (
+      <AsyncPreviewState
+        copy={copy}
+        state={presentationState}
+        emptyMessage={copy.previewInlineUnavailable}
+      />
+    )
+  }
+
+  const slides = presentationState.slides
+
+  if (slides.length === 0) {
+    return (
+      <AsyncPreviewState
+        copy={copy}
+        state={presentationState}
+        emptyMessage={copy.previewPresentationEmpty}
+      />
+    )
+  }
+
+  const activeSlide = slides.find((slide) => slide.id === activeSlideId) ?? slides[0]
+
+  return (
+    <div className="preview-presentation">
+      <div className="preview-sheet-toolbar">
+        <div
+          className="preview-sheet-tabs"
+          role="tablist"
+          aria-label={copy.previewSlideTabsAria}
+        >
+          {slides.map((slide) => (
+            <button
+              key={slide.id}
+              type="button"
+              className={`preview-sheet-tab ${slide.id === activeSlide.id ? 'is-active' : ''}`}
+              role="tab"
+              aria-selected={slide.id === activeSlide.id}
+              onClick={() => onSelectSlide(slide.id)}
+              title={getSlideTitle(copy, slide)}
+            >
+              {getSlideTabLabel(copy, slide)}
+            </button>
+          ))}
+        </div>
+
+        <div className="preview-sheet-stats" aria-hidden="true">
+          <span>{copy.previewSlidesLabel}: {slides.length}</span>
+        </div>
+      </div>
+
+      <div className="preview-slide-shell">
+        <article className="preview-slide-card">
+          <span className="preview-slide-kicker">
+            {interpolate(copy.previewSlideLabel, { index: activeSlide.index })}
+          </span>
+          <h4 className="preview-slide-title">{getSlideTitle(copy, activeSlide)}</h4>
+
+          {activeSlide.blocks.length > 0 ? (
+            <div className="preview-slide-body">
+              {activeSlide.blocks.map((block, index) => (
+                <p key={`${activeSlide.id}-block-${index}`} className="preview-slide-paragraph">
+                  {block}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="preview-slide-empty">{copy.previewSlideEmpty}</p>
+          )}
+        </article>
+      </div>
+    </div>
+  )
+}
+
 export default function FilePreviewPanel({ file, onClose, text = defaultPreviewText }) {
   const copy = { ...defaultPreviewText, ...text }
   const [activeTab, setActiveTab] = useState('preview')
   const [spreadsheetState, setSpreadsheetState] = useState(createInitialSpreadsheetState)
+  const [documentState, setDocumentState] = useState(createInitialDocumentState)
+  const [presentationState, setPresentationState] = useState(createInitialPresentationState)
   const [activeSheetName, setActiveSheetName] = useState('')
+  const [activeSlideId, setActiveSlideId] = useState('')
 
   const previewKind = getPreviewKind(file)
-  const details = [
-    {
-      label: copy.previewTypeLabel,
-      value: getKindLabel(copy, previewKind),
-    },
-    {
-      label: copy.previewSizeLabel,
-      value: formatFileSize(file?.size ?? 0),
-    },
-    {
-      label: copy.previewSourceLabel,
-      value: getSourceLabel(copy, file?.source),
-    },
-  ]
+  const canPreviewDocument = supportsStructuredDocumentPreview(file)
+  const canPreviewPresentation = supportsStructuredPresentationPreview(file)
 
   useEffect(() => {
     setActiveTab('preview')
     setSpreadsheetState(createInitialSpreadsheetState())
+    setDocumentState(createInitialDocumentState())
+    setPresentationState(createInitialPresentationState())
     setActiveSheetName('')
+    setActiveSlideId('')
   }, [file?.downloadUrl, file?.name])
 
   useEffect(() => {
@@ -261,18 +455,11 @@ export default function FilePreviewPanel({ file, onClose, text = defaultPreviewT
 
     void (async () => {
       try {
-        const [xlsx, response] = await Promise.all([
+        const [xlsx, arrayBuffer] = await Promise.all([
           import('xlsx'),
-          fetch(file.downloadUrl, {
-            signal: controller.signal,
-          }),
+          loadBinaryFile(file.downloadUrl, controller.signal),
         ])
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`)
-        }
-
-        const arrayBuffer = await response.arrayBuffer()
         const workbook = xlsx.read(arrayBuffer, { type: 'array' })
         const sheets = workbook.SheetNames.map((name) => {
           const worksheet = workbook.Sheets[name]
@@ -321,6 +508,150 @@ export default function FilePreviewPanel({ file, onClose, text = defaultPreviewT
       controller.abort()
     }
   }, [file?.downloadUrl, previewKind])
+
+  useEffect(() => {
+    if (previewKind !== 'document' || !file?.downloadUrl || !canPreviewDocument) {
+      return undefined
+    }
+
+    const controller = new AbortController()
+    let isActive = true
+
+    setDocumentState({
+      status: 'loading',
+      blocks: [],
+      paragraphCount: 0,
+      wordCount: 0,
+      error: '',
+    })
+
+    void (async () => {
+      try {
+        const arrayBuffer = await loadBinaryFile(file.downloadUrl, controller.signal)
+        const preview = parseDocumentPreview(arrayBuffer)
+
+        if (!isActive) {
+          return
+        }
+
+        setDocumentState({
+          status: 'ready',
+          ...preview,
+          error: '',
+        })
+      } catch (error) {
+        if (!isActive || error?.name === 'AbortError') {
+          return
+        }
+
+        setDocumentState({
+          status: 'error',
+          blocks: [],
+          paragraphCount: 0,
+          wordCount: 0,
+          error: error?.message ?? '',
+        })
+      }
+    })()
+
+    return () => {
+      isActive = false
+      controller.abort()
+    }
+  }, [canPreviewDocument, file?.downloadUrl, previewKind])
+
+  useEffect(() => {
+    if (previewKind !== 'presentation' || !file?.downloadUrl || !canPreviewPresentation) {
+      return undefined
+    }
+
+    const controller = new AbortController()
+    let isActive = true
+
+    setPresentationState({
+      status: 'loading',
+      slides: [],
+      error: '',
+    })
+
+    void (async () => {
+      try {
+        const arrayBuffer = await loadBinaryFile(file.downloadUrl, controller.signal)
+        const preview = parsePresentationPreview(arrayBuffer)
+
+        if (!isActive) {
+          return
+        }
+
+        setPresentationState({
+          status: 'ready',
+          ...preview,
+          error: '',
+        })
+
+        if (preview.slides[0]) {
+          setActiveSlideId(preview.slides[0].id)
+        }
+      } catch (error) {
+        if (!isActive || error?.name === 'AbortError') {
+          return
+        }
+
+        setPresentationState({
+          status: 'error',
+          slides: [],
+          error: error?.message ?? '',
+        })
+      }
+    })()
+
+    return () => {
+      isActive = false
+      controller.abort()
+    }
+  }, [canPreviewPresentation, file?.downloadUrl, previewKind])
+
+  const details = [
+    {
+      label: copy.previewTypeLabel,
+      value: getKindLabel(copy, previewKind),
+    },
+    {
+      label: copy.previewSizeLabel,
+      value: formatFileSize(file?.size ?? 0),
+    },
+    {
+      label: copy.previewSourceLabel,
+      value: getSourceLabel(copy, file?.source),
+    },
+  ]
+
+  if (previewKind === 'spreadsheet' && spreadsheetState.sheets.length > 0) {
+    details.push({
+      label: copy.previewSheetsLabel,
+      value: `${spreadsheetState.sheets.length}`,
+    })
+  }
+
+  if (previewKind === 'document' && documentState.paragraphCount > 0) {
+    details.push(
+      {
+        label: copy.previewParagraphsLabel,
+        value: `${documentState.paragraphCount}`,
+      },
+      {
+        label: copy.previewWordsLabel,
+        value: `${documentState.wordCount}`,
+      },
+    )
+  }
+
+  if (previewKind === 'presentation' && presentationState.slides.length > 0) {
+    details.push({
+      label: copy.previewSlidesLabel,
+      value: `${presentationState.slides.length}`,
+    })
+  }
 
   if (!file) {
     return (
@@ -415,6 +746,15 @@ export default function FilePreviewPanel({ file, onClose, text = defaultPreviewT
               activeSheetName={activeSheetName}
               onSelectSheet={setActiveSheetName}
             />
+          ) : previewKind === 'document' && canPreviewDocument ? (
+            <DocumentPreview copy={copy} documentState={documentState} />
+          ) : previewKind === 'presentation' && canPreviewPresentation ? (
+            <PresentationPreview
+              copy={copy}
+              presentationState={presentationState}
+              activeSlideId={activeSlideId}
+              onSelectSlide={setActiveSlideId}
+            />
           ) : (
             <div className="preview-state-card">
               <span className="preview-empty-icon" aria-hidden="true">
@@ -430,12 +770,6 @@ export default function FilePreviewPanel({ file, onClose, text = defaultPreviewT
               {details.map((item) => (
                 <PreviewValue key={item.label} label={item.label} value={item.value} />
               ))}
-              {previewKind === 'spreadsheet' && spreadsheetState.sheets.length > 0 ? (
-                <PreviewValue
-                  label={copy.previewSheetsLabel}
-                  value={`${spreadsheetState.sheets.length}`}
-                />
-              ) : null}
             </div>
           </div>
         )}

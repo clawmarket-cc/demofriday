@@ -57,6 +57,11 @@ const createPayload = ({ messages = [], runStatus, files = {}, pending } = {}) =
 
 const getComposerInput = () => screen.getAllByPlaceholderText('Message Excel Analyst...')[0]
 const RUNTIME_CONVERSATIONS_CACHE_KEY = '__golemforce-chat-runtime-conversations'
+const DOCX_PREVIEW_FIXTURE =
+  'UEsDBBQAAAAIABYGZlyn3//Y5QAAAGkBAAARAAAAd29yZC9kb2N1bWVudC54bWxNkEluxCAQRfd9ihJSljF2FEWRZdO7KMvOdABiV7otQYEA2+H2AZweVrwS//8auv2vVrCg85OhnjVVzQBpMONEx559fb7cPzPwQdIolSHsWUTP9mLXre1ohlkjBUgJ5Nu1Z6cQbMu5H06opa+MRUp/P8ZpGVLpjnw1brTODOh9aqAVf6jrJ67lREzsAFLqtxljxlLYjTY+OJGfjxAVwtouUvXsFWWetGFcdHzTXB1FH8TbLF1ApyIclKQsC0X8Ly2+m45X4zsuSDPC5GG20DzeQUTpwKRrFapusy4xGbYlMp2PJP4AUEsBAhQAFAAAAAgAFgZmXKff/9jlAAAAaQEAABEAAAAAAAAAAAAAAAAAAAAAAHdvcmQvZG9jdW1lbnQueG1sUEsFBgAAAAABAAEAPwAAABQBAAAAAA=='
+const PPTX_PREVIEW_FIXTURE =
+  'UEsDBBQAAAAIAFIGZlyB0XcdFgEAAFUCAAAVAAAAcHB0L3NsaWRlcy9zbGlkZTEueG1spZDLToQwFIb38xRN91K8xBgCTHThzmQC4wNUegSS0jbtkRne3tMyxLgxGjftf25/v55yf540m8GH0ZqKX2c5Z2A6q0bTV/z1+Hz1wFlAaZTU1kDFFwh8X+9KVwStGA2bUMiKD4iuECJ0A0wyZNaBodq79ZNECn0vlJcnMp20uMnzezHJ0fDLvPvNvPMQwKBEAv1mUu8YI5yu1aqOWO7oAWIypYNbZQrM3LqDj11mXm83MFwc/QtH1MBFXYqtmETq/zLA85NVS13K4o3ug6d+WeiALS4aUuDiQdOywLqBGcwHsBatX0oRU/GM3qmRXrgYrrQUb7g/k2+Y/6J7bBrWezgxtOw2u3vJ/kK4qrTpKNPydylJ4hNQSwMEFAAAAAgAUgZmXLcAw7IyAQAAmgIAABUAAABwcHQvc2xpZGVzL3NsaWRlMi54bWylUsFOwzAMve8rotxZBgeEqraTkODEYdLGB5jWWyPS1Eq8sf49TroJgQZC2iV5dvxenuOUy2Pv1AFDtIOv9O18oRX6Zmit31X6dfN886BVZPAtuMFjpUeMelnPSiqia5WQfSyg0h0zFcbEpsMe4nwg9HK2HUIPLGHYmTbAh4j2ztwtFvemB+v1iU//4VPAiJ6Bxeg3kXqmlNhp1q6tky3aBMSUzOlIE8yBP6xpFVKVP0w7dYpHkr7YskNt6tKcDzPI9V8CfHwc2rEuoXiTfRWkHgoXec2jwxxQWoQNBddPR2z2ya9aOfClSbm0JvFcKVecFCe7Ep/9/m397PMqey+w902nCJp32MloVMCtPHI3v+D0Z2MkP0I+CmOgYCMqsoTOerzE/bXLCeVxJZgnOMtJAZ9QSwECFAAUAAAACABSBmZcgdF3HRYBAABVAgAAFQAAAAAAAAAAAAAAAAAAAAAAcHB0L3NsaWRlcy9zbGlkZTEueG1sUEsBAhQAFAAAAAgAUgZmXLcAw7IyAQAAmgIAABUAAAAAAAAAAAAAAAAASQEAAHBwdC9zbGlkZXMvc2xpZGUyLnhtbFBLBQYAAAAAAgACAIYAAACuAgAAAAA='
+const decodeBase64ToArrayBuffer = (value) => Uint8Array.from(Buffer.from(value, 'base64')).buffer
 const createWorkbookPreviewBuffer = () => {
   const workbook = XLSX.utils.book_new()
   const overviewSheet = XLSX.utils.aoa_to_sheet([
@@ -85,6 +90,10 @@ const createWorkbookPreviewBuffer = () => {
   return new Uint8Array(bytes).buffer
 }
 
+const createDocxPreviewBuffer = () => decodeBase64ToArrayBuffer(DOCX_PREVIEW_FIXTURE)
+
+const createPptxPreviewBuffer = () => decodeBase64ToArrayBuffer(PPTX_PREVIEW_FIXTURE)
+
 describe('App chat flow', () => {
   beforeEach(() => {
     window.localStorage.clear()
@@ -103,7 +112,7 @@ describe('App chat flow', () => {
     cleanup()
   })
 
-  it('hides the waiting indicator once the latest turn has an assistant reply', async () => {
+  it('keeps the waiting indicator visible until the pending run completes', async () => {
     const user = userEvent.setup()
     let resolvePoll
 
@@ -162,7 +171,7 @@ describe('App chat flow', () => {
 
     expect(await screen.findByText('Need a summary')).toBeInTheDocument()
     expect((await screen.findAllByText('Summary ready')).length).toBeGreaterThan(0)
-    expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
+    expect(await screen.findByText('Waiting for agent output')).toBeInTheDocument()
 
     await act(async () => {
       resolvePoll()
@@ -178,6 +187,82 @@ describe('App chat flow', () => {
     })
 
     expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
+  })
+
+  it('shows a task-specific ticker label for pending Word generation', async () => {
+    const user = userEvent.setup()
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'queued',
+          pending: true,
+          label: 'Queued',
+        }),
+      }),
+    )
+
+    pollForChatCompletion.mockResolvedValue(
+      createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'running',
+          pending: true,
+          label: 'Waiting for agent output',
+        }),
+        messages: [],
+      }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Create a Word document for the customer')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('Generating Word document')).toBeInTheDocument()
+  })
+
+  it('does not show a running ticker while clearing chat history', async () => {
+    const user = userEvent.setup()
+    let resolveClear
+
+    fetchChat.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed',
+        }),
+        messages: [
+          { role: 'user', text: 'Old prompt', timestamp: '2026-03-06T10:00:00.000Z' },
+          { role: 'assistant', text: 'Old answer', timestamp: '2026-03-06T10:00:01.000Z' },
+        ],
+      }),
+    )
+
+    clearChat.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveClear = resolve
+        }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+    expect((await screen.findAllByText('Old answer')).length).toBeGreaterThan(0)
+
+    const clearButton = screen.getByLabelText('Clear chat history for Excel Analyst')
+    await user.click(clearButton)
+
+    expect(clearButton).toBeDisabled()
+    expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
+
+    await act(async () => {
+      resolveClear({ ok: true })
+    })
   })
 
   it('uploads a file and renders a generated artifact returned from the backend', async () => {
@@ -487,6 +572,47 @@ describe('App chat flow', () => {
     expect(screen.queryByText(/still pending/i)).not.toBeInTheDocument()
   })
 
+  it('marks the run complete when assistant text is present even if backend pending remains true', async () => {
+    const user = userEvent.setup()
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'queued',
+          pending: true,
+          label: 'Queued',
+        }),
+      }),
+    )
+
+    pollForChatCompletion.mockResolvedValue(
+      createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'running',
+          pending: true,
+          label: 'Waiting for agent output',
+        }),
+        messages: [
+          { role: 'user', text: 'Need summary', timestamp: '2026-03-05T12:10:00.000Z' },
+          { role: 'assistant', text: 'Summary is ready.', timestamp: '2026-03-05T12:10:01.000Z' },
+        ],
+      }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Need summary')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect((await screen.findAllByText('Summary is ready.')).length).toBeGreaterThan(0)
+    await waitFor(() => {
+      expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
+    })
+  })
+
   it('keeps earlier uploaded files visible after later non-file replies', async () => {
     const user = userEvent.setup()
 
@@ -759,6 +885,121 @@ describe('App chat flow', () => {
       'https://api.golemforce.ai/files/artifact-preview-pdf',
     )
     expect(screen.getByRole('tab', { name: 'Details' })).toBeInTheDocument()
+  })
+
+  it('opens a Word document preview with extracted text in the right-side panel', async () => {
+    const user = userEvent.setup()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => createDocxPreviewBuffer(),
+    })
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed with files',
+          artifactCount: 1,
+        }),
+        messages: [
+          { role: 'user', text: 'Generate the plan doc', timestamp: '2026-03-05T17:30:00.000Z' },
+          { role: 'assistant', text: 'The plan document is ready.', timestamp: '2026-03-05T17:30:01.000Z' },
+        ],
+        files: {
+          newArtifacts: [
+            {
+              id: 'artifact-preview-docx',
+              name: 'quarterly-plan.docx',
+              sizeBytes: 4096,
+              mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              downloadUrl: '/files/artifact-preview-docx',
+            },
+          ],
+        },
+      }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Generate the plan doc')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('quarterly-plan.docx')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+
+    expect(await screen.findByRole('heading', { name: 'quarterly-plan.docx' })).toBeInTheDocument()
+    expect((await screen.findAllByText('Quarterly Plan')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Revenue is up 14% year over year.').length).toBeGreaterThan(0)
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.golemforce.ai/files/artifact-preview-docx',
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    )
+  })
+
+  it('opens a presentation preview with slide tabs in the right-side panel', async () => {
+    const user = userEvent.setup()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => createPptxPreviewBuffer(),
+    })
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed with files',
+          artifactCount: 1,
+        }),
+        messages: [
+          { role: 'user', text: 'Build the deck', timestamp: '2026-03-05T17:45:00.000Z' },
+          { role: 'assistant', text: 'The deck is ready.', timestamp: '2026-03-05T17:45:01.000Z' },
+        ],
+        files: {
+          newArtifacts: [
+            {
+              id: 'artifact-preview-pptx',
+              name: 'board-deck.pptx',
+              sizeBytes: 8192,
+              mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              downloadUrl: '/files/artifact-preview-pptx',
+            },
+          ],
+        },
+      }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Build the deck')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('board-deck.pptx')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+
+    expect(await screen.findByRole('heading', { name: 'board-deck.pptx' })).toBeInTheDocument()
+    expect((await screen.findAllByText('Revenue Story')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Execution Plan').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('ARR grew to 3.4M.').length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole('tab', { name: 'Execution Plan' }))
+
+    expect((await screen.findAllByText('Expand enterprise pipeline.')).length).toBeGreaterThan(0)
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.golemforce.ai/files/artifact-preview-pptx',
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    )
   })
 
   it('renders a returned Word document when the backend attaches it directly to an assistant message', async () => {

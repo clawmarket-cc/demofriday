@@ -2,6 +2,12 @@ const SPREADSHEET_EXTENSIONS = new Set(['xls', 'xlsx'])
 const PDF_EXTENSIONS = new Set(['pdf'])
 const WORD_EXTENSIONS = new Set(['doc', 'docx'])
 const PRESENTATION_EXTENSIONS = new Set(['ppt', 'pptx'])
+const DOCX_EXTENSIONS = new Set(['docx'])
+const PPTX_EXTENSIONS = new Set(['pptx'])
+const DOCX_TYPES = new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document'])
+const PPTX_TYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+])
 
 export const getFileExtension = (filename = '') => {
   const lastDot = filename.lastIndexOf('.')
@@ -65,8 +71,27 @@ export const getPreviewKind = (file) => {
   return 'file'
 }
 
+export const supportsStructuredDocumentPreview = (file) => {
+  const extension = getFileExtension(file?.name ?? '')
+  const type = (file?.type ?? '').toLowerCase()
+
+  return DOCX_TYPES.has(type) || DOCX_EXTENSIONS.has(extension)
+}
+
+export const supportsStructuredPresentationPreview = (file) => {
+  const extension = getFileExtension(file?.name ?? '')
+  const type = (file?.type ?? '').toLowerCase()
+
+  return PPTX_TYPES.has(type) || PPTX_EXTENSIONS.has(extension)
+}
+
 export const supportsInlinePreview = (file) => {
   const kind = getPreviewKind(file)
 
-  return kind === 'pdf' || kind === 'spreadsheet'
+  return (
+    kind === 'pdf'
+    || kind === 'spreadsheet'
+    || supportsStructuredDocumentPreview(file)
+    || supportsStructuredPresentationPreview(file)
+  )
 }
