@@ -522,6 +522,7 @@ body {
 }
 
 .preview-open-link {
+  gap: 0.32rem;
   padding: 0.35rem 0.8rem;
   font-size: 0.68rem;
   font-weight: 700;
@@ -531,6 +532,11 @@ body {
 .preview-close-btn {
   width: 2rem;
   padding: 0;
+}
+
+.preview-open-icon,
+.message-file-action-icon {
+  flex-shrink: 0;
 }
 
 .preview-open-link:hover,
@@ -1336,6 +1342,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0.32rem;
   min-height: 2rem;
   padding: 0.32rem 0.72rem;
   border-radius: 999px;

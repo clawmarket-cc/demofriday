@@ -108,6 +108,21 @@ const defaultMessageText = {
   generatedFileLabel: 'Generated file',
 }
 
+const DownloadIcon = () => (
+  <svg
+    className="message-file-action-icon"
+    width="14"
+    height="14"
+    fill="none"
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+  >
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M12 4v10m0 0l-4-4m4 4l4-4" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M5 18h14" />
+  </svg>
+)
+
 const Attachment = ({
   file,
   actionLabel = '',
@@ -141,7 +156,8 @@ const Attachment = ({
           target="_blank"
           rel="noreferrer"
         >
-          {actionLabel}
+          <DownloadIcon />
+          <span>{actionLabel}</span>
         </a>
       ) : null}
     </span>

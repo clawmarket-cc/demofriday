@@ -84,6 +84,21 @@ const PreviewValue = ({ label, value }) => (
   </div>
 )
 
+const DownloadIcon = () => (
+  <svg
+    className="preview-open-icon"
+    width="16"
+    height="16"
+    fill="none"
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+  >
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M12 4v10m0 0l-4-4m4 4l4-4" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M5 18h14" />
+  </svg>
+)
+
 const SpreadsheetPreview = ({
   copy,
   spreadsheetState,
@@ -343,7 +358,8 @@ export default function FilePreviewPanel({ file, onClose, text = defaultPreviewT
               target="_blank"
               rel="noreferrer"
             >
-              {copy.previewOpenLabel}
+              <DownloadIcon />
+              <span>{copy.previewOpenLabel}</span>
             </a>
           ) : null}
 
