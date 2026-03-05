@@ -150,14 +150,15 @@ const Attachment = ({
       ) : null}
       {file.downloadUrl ? (
         <a
-          className="message-file-action"
+          className="message-file-action is-icon-only"
           href={file.downloadUrl}
           download
           target="_blank"
           rel="noreferrer"
+          aria-label={actionLabel}
+          title={actionLabel}
         >
           <DownloadIcon />
-          <span>{actionLabel}</span>
         </a>
       ) : null}
     </span>

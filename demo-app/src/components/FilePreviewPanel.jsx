@@ -352,14 +352,15 @@ export default function FilePreviewPanel({ file, onClose, text = defaultPreviewT
         <div className="preview-header-actions">
           {file.downloadUrl ? (
             <a
-              className="preview-open-link"
+              className="preview-open-link is-icon-only"
               href={file.downloadUrl}
               download
               target="_blank"
               rel="noreferrer"
+              aria-label={copy.previewOpenLabel}
+              title={copy.previewOpenLabel}
             >
               <DownloadIcon />
-              <span>{copy.previewOpenLabel}</span>
             </a>
           ) : null}
 

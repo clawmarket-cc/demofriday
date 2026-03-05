@@ -529,6 +529,11 @@ body {
   letter-spacing: 0.04em;
 }
 
+.preview-open-link.is-icon-only {
+  width: 2rem;
+  padding: 0;
+}
+
 .preview-close-btn {
   width: 2rem;
   padding: 0;
@@ -1362,6 +1367,12 @@ body {
 
 .message-file-action.is-secondary {
   background: rgba(255, 255, 255, 0.72);
+}
+
+.message-file-action.is-icon-only {
+  width: 2rem;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .message-file-action:hover {
