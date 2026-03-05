@@ -625,7 +625,7 @@ body {
 
 .typing-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.72rem;
   animation: message-in 220ms ease;
 }
@@ -652,7 +652,6 @@ body {
 }
 
 .typing-pill {
-  margin-top: 0.2rem;
   display: inline-flex;
   align-items: center;
   gap: 0.28rem;
@@ -660,6 +659,13 @@ body {
   border: 1px solid var(--gf-border-soft);
   background: #fff;
   padding: 0.45rem 0.62rem;
+}
+
+.typing-copy {
+  margin-top: 0.02rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--gf-muted);
 }
 
 .typing-dot {

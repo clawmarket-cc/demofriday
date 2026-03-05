@@ -21,12 +21,19 @@ const defaultChatText = {
   emptyTitle: 'Start with a clear task for {agent}',
   hints: ['Summarize this file', 'Find high-risk clauses', 'Build a quick report'],
   typingAria: '{agent} is typing',
+  workingLabel: '{agent} is working',
   attachFileAria: 'Attach file',
   messagePlaceholder: 'Message {agent}...',
   sendMessageAria: 'Send message',
   clearHistoryAria: 'Clear chat history for {agent}',
   clearHistoryTooltip: 'Clear chat history',
   clearHistoryConfirm: 'Clear all messages in the {agent} chat?',
+  uploadingStatus: 'Uploading file',
+  dispatchingStatus: 'Starting request',
+  runningStatus: 'Waiting for agent output',
+  completedStatus: 'Completed',
+  completedWithFilesStatus: 'Completed with files',
+  errorStatus: 'Run failed',
   fileTooLarge: 'File is too large. Maximum size is {maxSize}.',
   fileTypeError: 'Unsupported file type. Upload PDF, Excel, Word, or PowerPoint files.',
   removeAttachmentAria: 'Remove attachment',
@@ -66,6 +73,7 @@ export default function ChatPanel({
   onSend,
   onClearHistory,
   isSending = false,
+  runStatus = null,
   text = defaultChatText,
   statusLabels = defaultStatusLabels,
   locale,
@@ -178,11 +186,13 @@ export default function ChatPanel({
 
   const hasUserMessages = messages.some((message) => message.role === 'user')
   const hasMessages = messages.length > 0
-  const isTyping = messages[messages.length - 1]?.role === 'user'
+  const activeRunStatus = runStatus?.pending ? runStatus : null
+  const isTyping = Boolean(activeRunStatus)
   const { color: statusColor, label: statusLabel } = getStatusMeta(agent.status, labels)
   const hints = Array.isArray(agent.hints) && agent.hints.length > 0 ? agent.hints : copy.hints
-  const canSend = Boolean(input.trim() || selectedFile) && !isSending
-  const canClearHistory = hasMessages && !isSending
+  const canSend = Boolean(input.trim() || selectedFile) && !isSending && !activeRunStatus
+  const canClearHistory = hasMessages && !isSending && !activeRunStatus
+  const workingLabel = activeRunStatus?.label || interpolate(copy.workingLabel, { agent: agent.name })
   const composerClasses = [
     'composer-shell',
     isDragActive ? 'is-drag-active' : '',
@@ -308,6 +318,7 @@ export default function ChatPanel({
                   <span className="typing-dot" style={{ animationDelay: '160ms' }} />
                   <span className="typing-dot" style={{ animationDelay: '320ms' }} />
                 </span>
+                <span className="typing-copy">{workingLabel}</span>
               </div>
             )}
 

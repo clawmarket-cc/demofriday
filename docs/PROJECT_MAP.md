@@ -10,6 +10,9 @@ DemoFriday/
   README.md
   docs/
     PROJECT_MAP.md
+    backend/
+      README.md
+      openclaw-ui-proxy-server.patch
   demo-app/
     AGENTS.md
     README.md
@@ -62,6 +65,10 @@ DemoFriday/
 - Backend integration:
   - `demo-app/src/api/openclawProxy.js`: calls `/agents`, `/chat`, polling logic, payload normalization.
   - `demo-app/src/App.jsx`: orchestrates send flow, polling, lane availability, transcript hydration.
+
+- Backend patch package:
+  - `docs/backend/README.md`: deployment notes and live verification for the OpenClaw UI proxy changes.
+  - `docs/backend/openclaw-ui-proxy-server.patch`: backend `server.mjs` patch for async queueing, run status, and artifact return flow.
 
 - Visual system:
   - `demo-app/src/index.css`
