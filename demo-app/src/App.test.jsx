@@ -611,6 +611,46 @@ describe('App chat flow', () => {
     expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
   })
 
+  it('keeps the user message visible when backend returns an assistant-only snapshot', async () => {
+    const user = userEvent.setup()
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed',
+        }),
+        messages: [
+          {
+            role: 'assistant',
+            text: 'Done. I updated the file.',
+            timestamp: '2026-03-05T15:10:01.000Z',
+          },
+        ],
+      }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Please update this file')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('Please update this file')).toBeInTheDocument()
+    expect((await screen.findAllByText('Done. I updated the file.')).length).toBeGreaterThan(0)
+
+    const conversation = screen.getByLabelText('Excel Analyst conversation')
+    const conversationText = conversation.textContent ?? ''
+    const userIndex = conversationText.indexOf('Please update this file')
+    const assistantIndex = conversationText.indexOf('Done. I updated the file.')
+
+    expect(userIndex).toBeGreaterThanOrEqual(0)
+    expect(assistantIndex).toBeGreaterThanOrEqual(0)
+    expect(userIndex).toBeLessThan(assistantIndex)
+  })
+
   it('opens a workbook preview with sheet tabs in the right-side panel', async () => {
     const user = userEvent.setup()
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({

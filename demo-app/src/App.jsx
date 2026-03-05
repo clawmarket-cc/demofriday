@@ -412,6 +412,68 @@ const mergeConversationMetadataFromFallback = (messages, fallbackMessages) => {
   })
 }
 
+const buildMessageExactSignature = (message) =>
+  `${message?.role ?? ''}|${message?.timestamp ?? ''}|${message?.text ?? ''}`
+
+const buildMessageLooseSignature = (message) => `${message?.role ?? ''}|${message?.text ?? ''}`
+
+const appendMissingConversationMessages = (primaryMessages, secondaryMessages) => {
+  const nextMessages = [...primaryMessages]
+  const seenExactSignatures = new Set(nextMessages.map((message) => buildMessageExactSignature(message)))
+  const seenLooseSignatures = new Set(nextMessages.map((message) => buildMessageLooseSignature(message)))
+
+  secondaryMessages.forEach((message) => {
+    const exactSignature = buildMessageExactSignature(message)
+    const looseSignature = buildMessageLooseSignature(message)
+
+    if (seenExactSignatures.has(exactSignature) || seenLooseSignatures.has(looseSignature)) {
+      return
+    }
+
+    seenExactSignatures.add(exactSignature)
+    seenLooseSignatures.add(looseSignature)
+    nextMessages.push(message)
+  })
+
+  return nextMessages
+}
+
+const shouldPreferFallbackMessages = (backendMessages, fallbackMessages) => {
+  if (backendMessages.length < fallbackMessages.length) {
+    return true
+  }
+
+  const latestFallbackUserMessage = [...fallbackMessages]
+    .reverse()
+    .find((message) => message?.role === 'user')
+
+  if (!latestFallbackUserMessage) {
+    return false
+  }
+
+  const latestUserLooseSignature = buildMessageLooseSignature(latestFallbackUserMessage)
+
+  return !backendMessages.some(
+    (message) => buildMessageLooseSignature(message) === latestUserLooseSignature,
+  )
+}
+
+const mergeConversationMessages = (backendMessages = [], fallbackMessages = []) => {
+  if (!Array.isArray(backendMessages) || backendMessages.length === 0) {
+    return Array.isArray(fallbackMessages) ? [...fallbackMessages] : []
+  }
+
+  if (!Array.isArray(fallbackMessages) || fallbackMessages.length === 0) {
+    return [...backendMessages]
+  }
+
+  if (shouldPreferFallbackMessages(backendMessages, fallbackMessages)) {
+    return appendMissingConversationMessages(fallbackMessages, backendMessages)
+  }
+
+  return appendMissingConversationMessages(backendMessages, fallbackMessages)
+}
+
 const buildConversationFromPayload = (
   agentId,
   payload,
@@ -427,7 +489,7 @@ const buildConversationFromPayload = (
       id: `${agentId}-${message.timestamp || 'no-ts'}-${index}`,
     }),
   )
-  const messages = normalizedMessages.length > 0 ? normalizedMessages : [...fallbackMessages]
+  const messages = mergeConversationMessages(normalizedMessages, fallbackMessages)
   const mergedMessages = mergeConversationMetadataFromFallback(messages, fallbackMessages)
   const artifacts = extractNewArtifacts(payload)
   const withArtifacts = attachArtifactsToLatestAssistant(mergedMessages, artifacts)
@@ -956,6 +1018,82 @@ export default function App() {
     }))
   }
 
+  const handleRefreshRun = async (agentId) => {
+    if (!agentId) {
+      return
+    }
+
+    const agent = agentDefinitions.find((candidate) => candidate.id === agentId)
+    const conversationId = conversationIdsByAgentRef.current[agentId]
+
+    if (!agent || !conversationId) {
+      return
+    }
+
+    setRunStatusByAgent((prev) => ({
+      ...prev,
+      [agentId]: {
+        ...(prev[agentId] ?? {}),
+        state: 'running',
+        pending: true,
+        label: copy.chat.refreshingStatus || copy.chat.runningStatus,
+        error: null,
+        updatedAt: new Date().toISOString(),
+      },
+    }))
+
+    try {
+      const payload = await fetchChat({
+        agent: agent.backendName,
+        conversationId,
+        limit: 80,
+      })
+
+      if (conversationIdsByAgentRef.current[agentId] !== conversationId) {
+        return
+      }
+
+      const normalizedMessageCount = normalizeBackendMessages(payload).length
+      const artifacts = extractNewArtifacts(payload)
+      const runStatus = extractRunStatus(payload)
+
+      if (normalizedMessageCount > 0 || (artifacts.length > 0 && runStatus.pending === false)) {
+        setConversations((prev) => ({
+          ...prev,
+          [agentId]: buildConversationFromPayload(
+            agentId,
+            payload,
+            prev[agentId] ?? [],
+            copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+          ),
+        }))
+      }
+
+      setRunStatusByAgent((prev) => ({
+        ...prev,
+        [agentId]: runStatus.pending
+          ? {
+              ...runStatus,
+              label: runStatus.label || copy.chat.runningStatus,
+              updatedAt: new Date().toISOString(),
+            }
+          : runStatus,
+      }))
+    } catch (error) {
+      setRunStatusByAgent((prev) => ({
+        ...prev,
+        [agentId]: {
+          ...(prev[agentId] ?? {}),
+          state: 'error',
+          pending: false,
+          label: copy.chat.errorStatus,
+          error: error?.message || copy.chat.errorStatus,
+          updatedAt: new Date().toISOString(),
+        },
+      }))
+    }
+  }
+
   const handleSend = async (payload) => {
     const agentId = activeAgentId
     const agent = activeAgent
@@ -1295,6 +1433,7 @@ export default function App() {
             messages={resolvedConversations[activeAgent.id] ?? []}
             onSend={handleSend}
             onClearHistory={() => handleClearHistory(activeAgent.id)}
+            onRefreshRun={() => handleRefreshRun(activeAgent.id)}
             onPreviewFile={(file) => handlePreviewFile(activeAgent.id, file)}
             isSending={sendingByAgent[activeAgent.id]}
             runStatus={runStatusByAgent[activeAgent.id]}

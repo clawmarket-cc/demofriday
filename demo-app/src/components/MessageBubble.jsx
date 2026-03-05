@@ -1,4 +1,7 @@
+import { useState } from 'react'
 import { formatFileSize, getAttachmentLabel } from '../utils/filePreview'
+
+const LONG_ASSISTANT_MESSAGE_LIMIT = 900
 
 const renderInline = (text) => {
   const parts = text.split(/(\*\*.*?\*\*)/g)
@@ -106,6 +109,8 @@ const defaultMessageText = {
   previewArtifactLabel: 'Preview',
   downloadArtifactLabel: 'Download',
   generatedFileLabel: 'Generated file',
+  showMoreLabel: 'Show more',
+  showLessLabel: 'Show less',
 }
 
 const DownloadIcon = () => (
@@ -175,8 +180,15 @@ export default function MessageBubble({
   const copy = { ...defaultMessageText, ...text }
   const isUser = message.role === 'user'
   const hasText = Boolean(message.text?.trim())
+  const [isExpanded, setIsExpanded] = useState(false)
   const hasAttachment = Boolean(message.file)
   const artifacts = Array.isArray(message.artifacts) ? message.artifacts.filter(Boolean) : []
+  const shouldCollapseAssistantText =
+    !isUser && hasText && message.text.length > LONG_ASSISTANT_MESSAGE_LIMIT
+  const renderedText =
+    shouldCollapseAssistantText && !isExpanded
+      ? `${message.text.slice(0, LONG_ASSISTANT_MESSAGE_LIMIT).trimEnd()}...`
+      : message.text
   const time = new Date(message.timestamp).toLocaleTimeString(locale, {
     hour: '2-digit',
     minute: '2-digit',
@@ -227,7 +239,16 @@ export default function MessageBubble({
 
       <div className="message-stack">
         <div className="message-bubble assistant-bubble">
-          {hasText && renderText(message.text)}
+          {hasText && renderText(renderedText)}
+          {shouldCollapseAssistantText ? (
+            <button
+              type="button"
+              className="message-expand-btn"
+              onClick={() => setIsExpanded((prev) => !prev)}
+            >
+              {isExpanded ? copy.showLessLabel : copy.showMoreLabel}
+            </button>
+          ) : null}
           {hasAttachment && (
             <Attachment
               file={{
