@@ -46,6 +46,7 @@ const ru = {
     removeAttachmentLabel: 'Удалить',
     downloadArtifactLabel: 'Скачать',
     generatedFileLabel: 'Сгенерированный файл',
+    fileReadyResponse: 'Сгенерированный файл готов.',
     emptyAssistantResponse: 'Backend завершил запрос без текста ответа ассистента.',
     backendErrorPrefix: 'Не удалось подключиться к модельному backend. Попробуйте снова.',
     pendingTimeout:

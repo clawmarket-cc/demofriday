@@ -46,6 +46,7 @@ const en = {
     removeAttachmentLabel: 'Remove',
     downloadArtifactLabel: 'Download',
     generatedFileLabel: 'Generated file',
+    fileReadyResponse: 'Your generated file is ready.',
     emptyAssistantResponse: 'The backend completed without returning assistant text.',
     backendErrorPrefix: 'I could not reach the model backend. Please retry.',
     pendingTimeout:

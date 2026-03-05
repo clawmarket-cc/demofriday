@@ -21,7 +21,10 @@ import {
   postChat,
   uploadFiles,
 } from './api/openclawProxy'
-import { isAwaitingVisibleAgentResult } from './utils/chatFlow'
+import {
+  hasVisibleAssistantResultAfterLatestUser,
+  isAwaitingVisibleAgentResult,
+} from './utils/chatFlow'
 
 const STORAGE_CLIENT_ID_KEY = 'golemforce-chat-client-id'
 const STORAGE_CONVERSATION_IDS_KEY = 'golemforce-chat-conversation-ids'
@@ -33,6 +36,7 @@ const DEFAULT_FILE_PROMPT = 'Please analyze the uploaded file.'
 const DEFAULT_BACKEND_ERROR =
   'I could not reach the model backend. Please retry. If this keeps failing, check /health on the proxy.'
 const DEFAULT_EMPTY_ASSISTANT_RESPONSE = 'The backend completed without returning assistant text.'
+const DEFAULT_FILE_READY_RESPONSE = 'Your generated file is ready.'
 const DEFAULT_UPLOAD_ERROR = 'Upload completed without returning a file id.'
 const CHAT_REQUEST_TIMEOUT_MS = 3000
 const DIRECT_CHAT_RESPONSE_WAIT_MS = 2500
@@ -328,6 +332,28 @@ const attachUploadedFileToUserMessage = (messages, messageId, uploadedFile) =>
       : message,
   )
 
+const appendAssistantIfNoVisibleResult = ({
+  messages,
+  agentId,
+  text,
+  artifacts = [],
+}) => {
+  if (hasVisibleAssistantResultAfterLatestUser(messages)) {
+    return messages
+  }
+
+  return [
+    ...messages,
+    toUiMessage({
+      agentId,
+      role: 'assistant',
+      text,
+      artifacts,
+      timestamp: new Date().toISOString(),
+    }),
+  ]
+}
+
 const mergeConversationMetadataFromFallback = (messages, fallbackMessages) => {
   if (!Array.isArray(messages) || messages.length === 0) {
     return messages
@@ -407,7 +433,12 @@ const mergeConversationMetadataFromFallback = (messages, fallbackMessages) => {
   })
 }
 
-const buildConversationFromPayload = (agentId, payload, fallbackMessages = []) => {
+const buildConversationFromPayload = (
+  agentId,
+  payload,
+  fallbackMessages = [],
+  fileOnlyText = DEFAULT_FILE_READY_RESPONSE,
+) => {
   const normalizedMessages = normalizeBackendMessages(payload).map((message, index) =>
     toUiMessage({
       agentId,
@@ -430,12 +461,16 @@ const buildConversationFromPayload = (agentId, payload, fallbackMessages = []) =
     return mergedMessages
   }
 
+  if (extractRunStatus(payload).pending) {
+    return mergedMessages
+  }
+
   return [
     ...mergedMessages,
     toUiMessage({
       agentId,
       role: 'assistant',
-      text: '',
+      text: fileOnlyText,
       artifacts,
       timestamp: new Date().toISOString(),
     }),
@@ -503,7 +538,12 @@ export default function App() {
               return
             }
 
-            next[agentId] = buildConversationFromPayload(agentId, payload, prev[agentId] ?? [])
+            next[agentId] = buildConversationFromPayload(
+              agentId,
+              payload,
+              prev[agentId] ?? [],
+              copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+            )
           })
 
           return next
@@ -568,13 +608,22 @@ export default function App() {
                     return
                   }
 
+                  const normalizedMessageCount = normalizeBackendMessages(nextPayload).length
+                  const artifacts = extractNewArtifacts(nextPayload)
+                  const nextRunStatus = extractRunStatus(nextPayload)
+
                   if (
-                    normalizeBackendMessages(nextPayload).length > 0 ||
-                    extractNewArtifacts(nextPayload).length > 0
+                    normalizedMessageCount > 0 ||
+                    (artifacts.length > 0 && nextRunStatus.pending === false)
                   ) {
                     setConversations((prev) => ({
                       ...prev,
-                      [agentId]: buildConversationFromPayload(agentId, nextPayload, prev[agentId] ?? []),
+                      [agentId]: buildConversationFromPayload(
+                        agentId,
+                        nextPayload,
+                        prev[agentId] ?? [],
+                        copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+                      ),
                     }))
                   }
 
@@ -596,9 +645,31 @@ export default function App() {
               if (normalizeBackendMessages(finalPayload).length > 0 || artifacts.length > 0) {
                 setConversations((prev) => ({
                   ...prev,
-                  [agentId]: buildConversationFromPayload(agentId, finalPayload, prev[agentId] ?? []),
+                  [agentId]: finalRunStatus.pending
+                    ? appendAssistantIfNoVisibleResult({
+                        messages: buildConversationFromPayload(
+                          agentId,
+                          finalPayload,
+                          prev[agentId] ?? [],
+                          copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+                        ),
+                        agentId,
+                        text: copy.chat.pendingTimeout,
+                        artifacts: [],
+                      })
+                    : buildConversationFromPayload(
+                        agentId,
+                        finalPayload,
+                        prev[agentId] ?? [],
+                        copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+                      ),
                 }))
               } else if (assistantText || artifacts.length > 0) {
+                const fallbackText =
+                  artifacts.length > 0
+                    ? copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE
+                    : copy.chat.emptyAssistantResponse || DEFAULT_EMPTY_ASSISTANT_RESPONSE
+
                 setConversations((prev) => ({
                   ...prev,
                   [agentId]: [
@@ -606,10 +677,7 @@ export default function App() {
                     toUiMessage({
                       agentId,
                       role: 'assistant',
-                      text:
-                        assistantText
-                        || copy.chat.emptyAssistantResponse
-                        || DEFAULT_EMPTY_ASSISTANT_RESPONSE,
+                      text: assistantText || fallbackText,
                       artifacts,
                       timestamp: new Date().toISOString(),
                     }),
@@ -620,7 +688,14 @@ export default function App() {
               setRunStatusByAgent((prev) => ({
                 ...prev,
                 [agentId]: finalRunStatus.pending
-                  ? finalRunStatus
+                  ? {
+                      ...finalRunStatus,
+                      state: 'timeout',
+                      pending: false,
+                      label: copy.chat.pendingTimeout,
+                      error: null,
+                      updatedAt: new Date().toISOString(),
+                    }
                   : {
                       ...finalRunStatus,
                       state: 'completed',
@@ -964,13 +1039,21 @@ export default function App() {
               return
             }
 
-            if (
-              normalizeBackendMessages(payload).length > clientMessageCount ||
-              extractNewArtifacts(payload).length > 0
-            ) {
+            const normalizedMessageCount = normalizeBackendMessages(payload).length
+            const artifacts = extractNewArtifacts(payload)
+            const runStatus = extractRunStatus(payload)
+            const hasNewMessages = normalizedMessageCount > clientMessageCount
+            const shouldRenderArtifacts = artifacts.length > 0 && (hasNewMessages || !runStatus.pending)
+
+            if (hasNewMessages || shouldRenderArtifacts) {
               setConversations((prev) => ({
                 ...prev,
-                [agentId]: buildConversationFromPayload(agentId, payload, prev[agentId] ?? []),
+                [agentId]: buildConversationFromPayload(
+                  agentId,
+                  payload,
+                  prev[agentId] ?? [],
+                  copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+                ),
               }))
             }
 
@@ -1003,7 +1086,7 @@ export default function App() {
       const isStillPending = !finalPayload || finalRunStatus.pending
       const isFileOnlyAssistantMessage = artifacts.length > 0 && !assistantText && !isStillPending
       const finalAssistantText = isFileOnlyAssistantMessage
-        ? ''
+        ? copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE
         : assistantText
           || (isStillPending
             ? copy.chat.pendingTimeout
@@ -1015,7 +1098,24 @@ export default function App() {
       ) {
         setConversations((prev) => ({
           ...prev,
-          [agentId]: buildConversationFromPayload(agentId, finalPayload, prev[agentId] ?? []),
+          [agentId]: isStillPending
+            ? appendAssistantIfNoVisibleResult({
+                messages: buildConversationFromPayload(
+                  agentId,
+                  finalPayload,
+                  prev[agentId] ?? [],
+                  copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+                ),
+                agentId,
+                text: copy.chat.pendingTimeout,
+                artifacts: [],
+              })
+            : buildConversationFromPayload(
+                agentId,
+                finalPayload,
+                prev[agentId] ?? [],
+                copy.chat.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+              ),
         }))
       } else if (assistantText || artifacts.length > 0 || isStillPending) {
         setConversations((prev) => ({
@@ -1039,9 +1139,9 @@ export default function App() {
           ? {
               ...(prev[agentId] ?? {}),
               ...finalRunStatus,
-              state: 'running',
-              pending: true,
-              label: copy.chat.runningStatus,
+              state: 'timeout',
+              pending: false,
+              label: copy.chat.pendingTimeout,
               error: null,
               hasUploads: fileIds.length > 0 || finalRunStatus.hasUploads,
               updatedAt: new Date().toISOString(),

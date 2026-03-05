@@ -47,6 +47,7 @@ const de = {
     removeAttachmentLabel: 'Entfernen',
     downloadArtifactLabel: 'Download',
     generatedFileLabel: 'Erzeugte Datei',
+    fileReadyResponse: 'Deine erzeugte Datei ist bereit.',
     emptyAssistantResponse: 'Das Backend hat keine Assistant-Antwort zurueckgegeben.',
     backendErrorPrefix: 'Backend nicht erreichbar. Bitte erneut versuchen.',
     pendingTimeout:

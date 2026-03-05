@@ -332,6 +332,129 @@ describe('App chat flow', () => {
     expect(hasUploadDownloadLinkAfterSwitch).toBe(true)
   })
 
+  it('does not render artifact-only updates while the run is still pending', async () => {
+    const user = userEvent.setup()
+    let resolvePoll
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'queued',
+          pending: true,
+          label: 'Queued',
+        }),
+      }),
+    )
+
+    pollForChatCompletion.mockImplementation(async ({ onUpdate }) => {
+      onUpdate(
+        createPayload({
+          pending: true,
+          runStatus: createRunStatus({
+            state: 'running',
+            pending: true,
+            label: 'Waiting for agent output',
+          }),
+          messages: [{ role: 'user', text: 'Build the report', timestamp: '2026-03-05T14:00:00.000Z' }],
+          files: {
+            newArtifacts: [
+              {
+                id: 'artifact-pending-1',
+                name: 'report.xlsx',
+                sizeBytes: 2048,
+                mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                downloadUrl: '/files/artifact-pending-1',
+              },
+            ],
+          },
+        }),
+      )
+
+      return await new Promise((resolve) => {
+        resolvePoll = () =>
+          resolve(
+            createPayload({
+              pending: false,
+              runStatus: createRunStatus({
+                state: 'completed',
+                pending: false,
+                label: 'Completed with files',
+                artifactCount: 1,
+              }),
+              messages: [
+                { role: 'user', text: 'Build the report', timestamp: '2026-03-05T14:00:00.000Z' },
+                { role: 'assistant', text: 'Report complete.', timestamp: '2026-03-05T14:00:01.000Z' },
+              ],
+              files: {
+                newArtifacts: [
+                  {
+                    id: 'artifact-pending-1',
+                    name: 'report.xlsx',
+                    sizeBytes: 2048,
+                    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    downloadUrl: '/files/artifact-pending-1',
+                  },
+                ],
+              },
+            }),
+          )
+      })
+    })
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Build the report')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('Build the report')).toBeInTheDocument()
+    expect(screen.queryByText('report.xlsx')).not.toBeInTheDocument()
+
+    await act(async () => {
+      resolvePoll()
+    })
+
+    expect((await screen.findAllByText('Report complete.')).length).toBeGreaterThan(0)
+    expect(await screen.findByText('report.xlsx')).toBeInTheDocument()
+  })
+
+  it('surfaces a timeout assistant message instead of staying stuck in pending', async () => {
+    const user = userEvent.setup()
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'queued',
+          pending: true,
+          label: 'Queued',
+        }),
+      }),
+    )
+
+    pollForChatCompletion.mockResolvedValue(
+      createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'running',
+          pending: true,
+          label: 'Waiting for agent output',
+        }),
+        messages: [{ role: 'user', text: 'Need summary', timestamp: '2026-03-05T15:00:00.000Z' }],
+      }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Need summary')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect((await screen.findAllByText(/still pending/i)).length).toBeGreaterThan(0)
+    expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
+  })
+
   it('keeps earlier uploaded files visible after later non-file replies', async () => {
     const user = userEvent.setup()
 
