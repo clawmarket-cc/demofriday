@@ -17,6 +17,7 @@ This folder packages the backend changes that were deployed and verified on `dem
 - Caches configured agents in memory and warms them on startup so the first request after restart is fast.
 - Strips the injected `[UI_FILE_CONTEXT]...[/UI_FILE_CONTEXT]` block back out of user history before returning messages to the frontend.
 - Adds `DELETE /chat` cleanup for uploaded/generated file records and exchange directories.
+- Tombstones cleared sessions for 30 minutes so late background run output is purged instead of repopulating chat history.
 
 ## Live verification
 
@@ -44,6 +45,19 @@ Flow verified:
    - `running`
 4. The Excel agent generated `summary.txt`, and `GET /chat` exposed it in `files.newArtifacts` while the run was still active.
 5. `GET /files/:fileId` downloaded the generated artifact successfully.
+
+### Clear-after-send race
+
+Verified on March 5, 2026 with `Excel Analyst` against `http://127.0.0.1:8787`.
+
+Flow verified:
+
+1. `POST /chat` returned `202` for a fresh `conversationId`.
+2. `DELETE /chat` for that same `conversationId` returned `200` immediately after.
+3. Eight follow-up `GET /chat` polls over about 12 seconds all returned:
+   - `messages: []`
+   - `pending: false`
+   - `runStatus.state: "idle"`
 
 Downloaded artifact contents:
 

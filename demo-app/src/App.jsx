@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatPanel from './components/ChatPanel'
 import {
@@ -23,6 +23,7 @@ import {
 } from './api/openclawProxy'
 
 const STORAGE_CLIENT_ID_KEY = 'golemforce-chat-client-id'
+const STORAGE_CONVERSATION_IDS_KEY = 'golemforce-chat-conversation-ids'
 const DEFAULT_THREAD_ID = 'main'
 
 const DEFAULT_FILE_PROMPT = 'Please analyze the uploaded file.'
@@ -63,7 +64,7 @@ const createClientId = () => {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-const getConversationId = () => {
+const getClientId = () => {
   if (typeof window === 'undefined') {
     return `local:${DEFAULT_THREAD_ID}`
   }
@@ -78,8 +79,76 @@ const getConversationId = () => {
 
     return `${clientId}:${DEFAULT_THREAD_ID}`
   } catch {
-    return `volatile-${createClientId()}:${DEFAULT_THREAD_ID}`
+    return `volatile-${createClientId()}`
   }
+}
+
+const buildConversationId = (agentId, clientId = getClientId()) => {
+  const agentSegment =
+    typeof agentId === 'string' && agentId.trim() ? agentId.trim() : DEFAULT_THREAD_ID
+
+  return `${clientId}:${agentSegment}:${createClientId()}`
+}
+
+const readStoredConversationIds = () => {
+  if (typeof window === 'undefined') {
+    return {}
+  }
+
+  try {
+    const raw = window.localStorage.getItem(STORAGE_CONVERSATION_IDS_KEY)
+
+    if (!raw) {
+      return {}
+    }
+
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+const persistConversationIds = (conversationIds) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(STORAGE_CONVERSATION_IDS_KEY, JSON.stringify(conversationIds))
+  } catch {
+    // Ignore localStorage persistence failures and keep the in-memory ids.
+  }
+}
+
+const createInitialConversationIds = () => {
+  const clientId = getClientId()
+  const storedConversationIds = readStoredConversationIds()
+  const conversationIds = Object.fromEntries(
+    agentDefinitions.map((agent) => {
+      const storedConversationId =
+        typeof storedConversationIds[agent.id] === 'string'
+          ? storedConversationIds[agent.id].trim()
+          : ''
+
+      return [agent.id, storedConversationId || buildConversationId(agent.id, clientId)]
+    }),
+  )
+
+  persistConversationIds(conversationIds)
+
+  return conversationIds
+}
+
+const rotateConversationId = (conversationIds, agentId) => {
+  const nextConversationIds = {
+    ...conversationIds,
+    [agentId]: buildConversationId(agentId),
+  }
+
+  persistConversationIds(nextConversationIds)
+
+  return nextConversationIds
 }
 
 const toUiFile = (file) => {
@@ -223,24 +292,32 @@ export default function App() {
   const [conversations, setConversations] = useState(createInitialConversations)
   const [sendingByAgent, setSendingByAgent] = useState(createInitialSendingState)
   const [runStatusByAgent, setRunStatusByAgent] = useState(createInitialRunStatusState)
+  const [conversationIdsByAgent, setConversationIdsByAgent] = useState(createInitialConversationIds)
 
-  const conversationId = useMemo(() => getConversationId(), [])
+  const conversationIdsByAgentRef = useRef(conversationIdsByAgent)
   const copy = translations[language] ?? translations.en
 
   useEffect(() => {
+    conversationIdsByAgentRef.current = conversationIdsByAgent
+  }, [conversationIdsByAgent])
+
+  useEffect(() => {
     let isDisposed = false
+    const isCurrentConversation = (agentId, nextConversationId) =>
+      conversationIdsByAgentRef.current[agentId] === nextConversationId
 
     const hydrateConversations = async () => {
       try {
         const settled = await Promise.allSettled(
           agentDefinitions.map(async (agent) => {
+            const nextConversationId = conversationIdsByAgentRef.current[agent.id]
             const payload = await fetchChat({
               agent: agent.backendName,
-              conversationId,
+              conversationId: nextConversationId,
               limit: 80,
             })
 
-            return [agent.id, payload]
+            return [agent.id, nextConversationId, payload]
           }),
         )
 
@@ -256,7 +333,11 @@ export default function App() {
               return
             }
 
-            const [agentId, payload] = result.value
+            const [agentId, nextConversationId, payload] = result.value
+
+            if (!isCurrentConversation(agentId, nextConversationId)) {
+              return
+            }
 
             if ((prev[agentId] ?? []).length > 0) {
               return
@@ -276,7 +357,12 @@ export default function App() {
               return
             }
 
-            const [agentId, payload] = result.value
+            const [agentId, nextConversationId, payload] = result.value
+
+            if (!isCurrentConversation(agentId, nextConversationId)) {
+              return
+            }
+
             next[agentId] = extractRunStatus(payload)
           })
 
@@ -288,7 +374,12 @@ export default function App() {
             return
           }
 
-          const [agentId, payload] = result.value
+          const [agentId, nextConversationId, payload] = result.value
+
+          if (!isCurrentConversation(agentId, nextConversationId)) {
+            return
+          }
+
           const runStatus = extractRunStatus(payload)
           const agent = agentDefinitions.find((candidate) => candidate.id === agentId)
 
@@ -309,11 +400,11 @@ export default function App() {
             try {
               const finalPayload = await pollForChatCompletion({
                 agent: agent.backendName,
-                conversationId,
+                conversationId: nextConversationId,
                 previousAssistantCount,
                 timeoutMs: POLL_TIMEOUT_MS,
                 onUpdate: (nextPayload) => {
-                  if (isDisposed) {
+                  if (isDisposed || !isCurrentConversation(agentId, nextConversationId)) {
                     return
                   }
 
@@ -334,7 +425,7 @@ export default function App() {
                 },
               })
 
-              if (isDisposed || !finalPayload) {
+              if (isDisposed || !finalPayload || !isCurrentConversation(agentId, nextConversationId)) {
                 return
               }
 
@@ -387,7 +478,7 @@ export default function App() {
                     },
               }))
             } catch (error) {
-              if (isDisposed) {
+              if (isDisposed || !isCurrentConversation(agentId, nextConversationId)) {
                 return
               }
 
@@ -403,7 +494,7 @@ export default function App() {
                 },
               }))
             } finally {
-              if (!isDisposed) {
+              if (!isDisposed && isCurrentConversation(agentId, nextConversationId)) {
                 setSendingByAgent((prev) => ({
                   ...prev,
                   [agentId]: false,
@@ -423,7 +514,6 @@ export default function App() {
       isDisposed = true
     }
   }, [
-    conversationId,
     copy.chat.completedStatus,
     copy.chat.completedWithFilesStatus,
     copy.chat.emptyAssistantResponse,
@@ -472,6 +562,8 @@ export default function App() {
       return
     }
 
+    const conversationId = conversationIdsByAgentRef.current[agentId]
+
     setSendingByAgent((prev) => ({
       ...prev,
       [agentId]: true,
@@ -492,6 +584,8 @@ export default function App() {
         ...prev,
         [agentId]: null,
       }))
+
+      setConversationIdsByAgent((prev) => rotateConversationId(prev, agentId))
     } catch (error) {
       const message =
         (copy.chat.backendErrorPrefix || DEFAULT_BACKEND_ERROR) +
@@ -532,8 +626,10 @@ export default function App() {
   const handleSend = async (payload) => {
     const agentId = activeAgentId
     const agent = activeAgent
+    const conversationId = conversationIdsByAgentRef.current[agentId]
+    const isCurrentConversation = () => conversationIdsByAgentRef.current[agentId] === conversationId
 
-    if (!agent || sendingByAgent[agentId]) {
+    if (!agent || !conversationId || sendingByAgent[agentId]) {
       return
     }
 
@@ -659,21 +755,25 @@ export default function App() {
       let artifacts = finalPayload ? extractNewArtifacts(finalPayload) : []
 
       if (finalPayload) {
-        setRunStatusByAgent((prev) => ({
-          ...prev,
-          [agentId]: extractRunStatus(finalPayload),
-        }))
+        if (isCurrentConversation()) {
+          setRunStatusByAgent((prev) => ({
+            ...prev,
+            [agentId]: extractRunStatus(finalPayload),
+          }))
+        }
       } else {
-        setRunStatusByAgent((prev) => ({
-          ...prev,
-          [agentId]: {
-            ...(prev[agentId] ?? {}),
-            state: 'running',
-            pending: true,
-            label: copy.chat.runningStatus,
-            updatedAt: new Date().toISOString(),
-          },
-        }))
+        if (isCurrentConversation()) {
+          setRunStatusByAgent((prev) => ({
+            ...prev,
+            [agentId]: {
+              ...(prev[agentId] ?? {}),
+              state: 'running',
+              pending: true,
+              label: copy.chat.runningStatus,
+              updatedAt: new Date().toISOString(),
+            },
+          }))
+        }
       }
 
       if (!assistantText || extractRunStatus(finalPayload).pending) {
@@ -683,6 +783,10 @@ export default function App() {
           previousAssistantCount,
           timeoutMs: POLL_TIMEOUT_MS,
           onUpdate: (payload) => {
+            if (!isCurrentConversation()) {
+              return
+            }
+
             if (
               normalizeBackendMessages(payload).length > clientMessageCount ||
               extractNewArtifacts(payload).length > 0
@@ -705,11 +809,17 @@ export default function App() {
           assistantText = extractAssistantText(polledPayload, previousAssistantCount)
           artifacts = extractNewArtifacts(polledPayload)
 
-          setRunStatusByAgent((prev) => ({
-            ...prev,
-            [agentId]: extractRunStatus(polledPayload),
-          }))
+          if (isCurrentConversation()) {
+            setRunStatusByAgent((prev) => ({
+              ...prev,
+              [agentId]: extractRunStatus(polledPayload),
+            }))
+          }
         }
+      }
+
+      if (!isCurrentConversation()) {
+        return
       }
 
       const finalRunStatus = extractRunStatus(finalPayload)
