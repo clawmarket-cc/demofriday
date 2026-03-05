@@ -25,6 +25,7 @@ import { isAwaitingVisibleAgentResult } from './utils/chatFlow'
 
 const STORAGE_CLIENT_ID_KEY = 'golemforce-chat-client-id'
 const STORAGE_CONVERSATION_IDS_KEY = 'golemforce-chat-conversation-ids'
+const RUNTIME_CONVERSATIONS_CACHE_KEY = '__golemforce-chat-runtime-conversations'
 const DEFAULT_THREAD_ID = 'main'
 
 const DEFAULT_FILE_PROMPT = 'Please analyze the uploaded file.'
@@ -36,8 +37,47 @@ const CHAT_REQUEST_TIMEOUT_MS = 3000
 const DIRECT_CHAT_RESPONSE_WAIT_MS = 2500
 const POLL_TIMEOUT_MS = 120000
 
-const createInitialConversations = () =>
+const createEmptyConversations = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, []]))
+
+const readRuntimeConversations = () => {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  const cached = window[RUNTIME_CONVERSATIONS_CACHE_KEY]
+
+  if (!cached || typeof cached !== 'object') {
+    return null
+  }
+
+  return cached
+}
+
+const persistRuntimeConversations = (conversations) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window[RUNTIME_CONVERSATIONS_CACHE_KEY] = conversations
+}
+
+const createInitialConversations = () => {
+  const initial = createEmptyConversations()
+  const cached = readRuntimeConversations()
+
+  if (!cached) {
+    return initial
+  }
+
+  agentDefinitions.forEach((agent) => {
+    if (Array.isArray(cached[agent.id])) {
+      initial[agent.id] = cached[agent.id]
+    }
+  })
+
+  return initial
+}
 
 const createInitialSendingState = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, false]))
@@ -302,6 +342,10 @@ export default function App() {
   useEffect(() => {
     conversationIdsByAgentRef.current = conversationIdsByAgent
   }, [conversationIdsByAgent])
+
+  useEffect(() => {
+    persistRuntimeConversations(conversations)
+  }, [conversations])
 
   useEffect(() => {
     let isDisposed = false

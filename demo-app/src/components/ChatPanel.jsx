@@ -185,7 +185,6 @@ export default function ChatPanel({
     }
   }
 
-  const hasUserMessages = messages.some((message) => message.role === 'user')
   const hasMessages = messages.length > 0
   const activeRunStatus = isAwaitingVisibleAgentResult({ messages, isSending, runStatus })
     ? runStatus
@@ -275,7 +274,7 @@ export default function ChatPanel({
       </header>
 
       <div className="chat-stream">
-        {!hasUserMessages ? (
+        {!hasMessages ? (
           <div className="chat-empty">
             <div className="empty-card">
               <span className="empty-chip">{copy.readyChip}</span>
