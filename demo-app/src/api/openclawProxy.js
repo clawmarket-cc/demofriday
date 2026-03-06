@@ -455,7 +455,7 @@ export const pollForAssistantReply = async ({
   const deadline = Date.now() + timeoutMs
 
   while (Date.now() < deadline) {
-    const payload = await fetchChat({ agent: agent ?? agentId, conversationId, limit: 200 })
+    const payload = await fetchChat({ agent: agent ?? agentId, conversationId, limit: 80 })
     const assistantText = extractAssistantText(payload, previousAssistantCount)
 
     if (assistantText) {
@@ -483,7 +483,7 @@ export const pollForChatCompletion = async ({
   let remainingCompletionGracePolls = Math.max(0, completionGracePolls)
 
   while (Date.now() < deadline) {
-    const payload = await fetchChat({ agent: agent ?? agentId, conversationId, limit: 200 })
+    const payload = await fetchChat({ agent: agent ?? agentId, conversationId, limit: 80 })
     lastPayload = payload
     onUpdate?.(payload)
 

@@ -201,6 +201,44 @@ describe('App chat flow', () => {
     expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
   })
 
+
+  it('falls back to polling quickly when the direct chat response is slow', async () => {
+    const user = userEvent.setup()
+
+    postChat.mockImplementation(() => new Promise(() => {}))
+
+    pollForChatCompletion.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed',
+        }),
+        messages: [
+          { role: 'user', text: 'Need a quick reply', timestamp: '2026-03-05T10:15:00.000Z' },
+          { role: 'assistant', text: 'Quick reply ready.', timestamp: '2026-03-05T10:15:01.000Z' },
+        ],
+      }),
+    )
+
+    render(<App />)
+
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Need a quick reply')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(pollForChatCompletion).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(pollForChatCompletion).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: 'Excel Analyst',
+        }),
+      )
+    })
+  })
   it('renders pending assistant text from the initial chat response without waiting for the next poll', async () => {
     const user = userEvent.setup()
     let resolvePoll
