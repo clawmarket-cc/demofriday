@@ -1020,6 +1020,63 @@ describe('App chat flow', () => {
     )
   })
 
+  it('opens a returned markdown preview using artifact mime types', async () => {
+    const user = userEvent.setup()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      text: async () =>
+        '# Revenue Brief\n\n**Summary**\n- ARR expanded 18% year over year.\n1. Expand enterprise pipeline.',
+    })
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed with files',
+          artifactCount: 1,
+        }),
+        messages: [
+          { role: 'user', text: 'Generate the markdown brief', timestamp: '2026-03-05T17:25:00.000Z' },
+          { role: 'assistant', text: 'Markdown brief is ready.', timestamp: '2026-03-05T17:25:01.000Z' },
+        ],
+        files: {
+          newArtifacts: [
+            {
+              id: 'artifact-preview-md',
+              name: 'briefing',
+              sizeBytes: 64,
+              mimeType: 'text/markdown',
+              downloadUrl: '/files/artifact-preview-md',
+            },
+          ],
+        },
+      }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Generate the markdown brief')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('briefing')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+
+    expect(await screen.findByRole('heading', { name: 'briefing' })).toBeInTheDocument()
+    expect(await screen.findByText('Revenue Brief')).toBeInTheDocument()
+    expect(screen.getByText('ARR expanded 18% year over year.')).toBeInTheDocument()
+    expect(screen.getByText('Expand enterprise pipeline.')).toBeInTheDocument()
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.golemforce.ai/files/artifact-preview-md',
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    )
+  })
+
   it('opens a Word document preview with extracted text in the right-side panel', async () => {
     const user = userEvent.setup()
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({

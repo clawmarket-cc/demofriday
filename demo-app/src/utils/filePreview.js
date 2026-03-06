@@ -40,7 +40,7 @@ export const getAttachmentLabel = (filename = '') => {
 
 export const getPreviewKind = (file) => {
   const extension = getFileExtension(file?.name ?? '')
-  const type = (file?.type ?? '').toLowerCase()
+  const type = (file?.type ?? file?.mimeType ?? '').toLowerCase()
 
   if (type === 'application/pdf' || PDF_EXTENSIONS.has(extension)) {
     return 'pdf'
@@ -79,14 +79,14 @@ export const getPreviewKind = (file) => {
 
 export const supportsStructuredDocumentPreview = (file) => {
   const extension = getFileExtension(file?.name ?? '')
-  const type = (file?.type ?? '').toLowerCase()
+  const type = (file?.type ?? file?.mimeType ?? '').toLowerCase()
 
   return DOCX_TYPES.has(type) || DOCX_EXTENSIONS.has(extension)
 }
 
 export const supportsStructuredPresentationPreview = (file) => {
   const extension = getFileExtension(file?.name ?? '')
-  const type = (file?.type ?? '').toLowerCase()
+  const type = (file?.type ?? file?.mimeType ?? '').toLowerCase()
 
   return PPTX_TYPES.has(type) || PPTX_EXTENSIONS.has(extension)
 }
