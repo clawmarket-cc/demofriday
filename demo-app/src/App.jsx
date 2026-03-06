@@ -1223,7 +1223,9 @@ export default function App() {
   }, [extractDisplayRunStatus, getChatCopy, runStatusByAgent, sendingByAgent, setTaskStatusLabel])
 
   const agents = useMemo(() => {
-    const localizedAgents = buildAgents(language)
+    const localizedAgents = buildAgents(language).filter(
+      (agent) => agent.isVisibleInUi !== false,
+    )
 
     return localizedAgents.map((agent) => ({
       ...agent,

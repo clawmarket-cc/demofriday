@@ -26,5 +26,6 @@ export const agentDefinitions = [
     logo: powerpointLogo,
     icon: 'PPT',
     status: 'online',
+    isVisibleInUi: false,
   },
 ]

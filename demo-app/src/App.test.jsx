@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as XLSX from 'xlsx'
@@ -110,6 +110,18 @@ describe('App chat flow', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     cleanup()
+  })
+
+  it('hides PowerPoint Maker from the visible agent list', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    const agentList = screen.getByRole('navigation', { name: 'Available agents' })
+
+    expect(within(agentList).getByRole('button', { name: /Excel Analyst/i })).toBeInTheDocument()
+    expect(within(agentList).getByRole('button', { name: /PDF Agent/i })).toBeInTheDocument()
+    expect(within(agentList).queryByRole('button', { name: /PowerPoint Maker/i })).not.toBeInTheDocument()
   })
 
   it('keeps the waiting indicator visible until the pending run completes', async () => {
