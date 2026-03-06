@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as XLSX from 'xlsx'
@@ -57,6 +57,7 @@ const createPayload = ({ messages = [], runStatus, files = {}, pending } = {}) =
 
 const getComposerInput = () => screen.getAllByPlaceholderText('Message Excel Analyst...')[0]
 const RUNTIME_CONVERSATIONS_CACHE_KEY = '__golemforce-chat-runtime-conversations'
+const RUN_STATUS_STORAGE_KEY = 'golemforce-chat-run-status'
 const DOCX_PREVIEW_FIXTURE =
   'UEsDBBQAAAAIABYGZlyn3//Y5QAAAGkBAAARAAAAd29yZC9kb2N1bWVudC54bWxNkEluxCAQRfd9ihJSljF2FEWRZdO7KMvOdABiV7otQYEA2+H2AZweVrwS//8auv2vVrCg85OhnjVVzQBpMONEx559fb7cPzPwQdIolSHsWUTP9mLXre1ohlkjBUgJ5Nu1Z6cQbMu5H06opa+MRUp/P8ZpGVLpjnw1brTODOh9aqAVf6jrJ67lREzsAFLqtxljxlLYjTY+OJGfjxAVwtouUvXsFWWetGFcdHzTXB1FH8TbLF1ApyIclKQsC0X8Ly2+m45X4zsuSDPC5GG20DzeQUTpwKRrFapusy4xGbYlMp2PJP4AUEsBAhQAFAAAAAgAFgZmXKff/9jlAAAAaQEAABEAAAAAAAAAAAAAAAAAAAAAAHdvcmQvZG9jdW1lbnQueG1sUEsFBgAAAAABAAEAPwAAABQBAAAAAA=='
 const PPTX_PREVIEW_FIXTURE =
@@ -108,6 +109,7 @@ describe('App chat flow', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     cleanup()
   })
@@ -121,7 +123,9 @@ describe('App chat flow', () => {
 
     expect(within(agentList).getByRole('button', { name: /Excel Analyst/i })).toBeInTheDocument()
     expect(within(agentList).getByRole('button', { name: /PDF Agent/i })).toBeInTheDocument()
-    expect(within(agentList).queryByRole('button', { name: /PowerPoint Maker/i })).not.toBeInTheDocument()
+    expect(
+      within(agentList).queryByRole('button', { name: /PowerPoint Maker/i }),
+    ).not.toBeInTheDocument()
   })
 
   it('keeps the waiting indicator visible until the pending run completes', async () => {
@@ -201,7 +205,6 @@ describe('App chat flow', () => {
     expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
   })
 
-
   it('falls back to polling quickly when the direct chat response is slow', async () => {
     const user = userEvent.setup()
 
@@ -239,6 +242,72 @@ describe('App chat flow', () => {
       )
     })
   })
+
+  it('keeps the pending timer running when backend pending updates omit startedAt', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-06T07:00:00.000Z'))
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'queued',
+          pending: true,
+          label: 'Queued',
+          startedAt: null,
+        }),
+        messages: [],
+      }),
+    )
+
+    pollForChatCompletion.mockImplementation(async ({ onUpdate }) => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500)
+      })
+
+      onUpdate(
+        createPayload({
+          pending: true,
+          runStatus: createRunStatus({
+            state: 'running',
+            pending: true,
+            label: 'Waiting for agent output',
+            startedAt: null,
+          }),
+          messages: [],
+        }),
+      )
+
+      return createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'running',
+          pending: true,
+          label: 'Waiting for agent output',
+          startedAt: null,
+        }),
+        messages: [],
+      })
+    })
+
+    render(<App />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(fetchChat).toHaveBeenCalledTimes(3)
+
+    fireEvent.change(getComposerInput(), { target: { value: 'Keep the timer steady' } })
+    fireEvent.click(screen.getByLabelText('Send message'))
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000)
+    })
+
+    expect(pollForChatCompletion).toHaveBeenCalled()
+    expect(screen.getByText(/\(15s\)/i)).toBeInTheDocument()
+  })
+
   it('renders pending assistant text from the initial chat response without waiting for the next poll', async () => {
     const user = userEvent.setup()
     let resolvePoll
@@ -351,6 +420,114 @@ describe('App chat flow', () => {
     expect(secondConversationIds[0]).toBe(firstConversationId)
   })
 
+  it('ignores stale persisted pending runs and does not trigger background polling on startup', async () => {
+    vi.useFakeTimers()
+
+    const staleTimestamp = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+    window.localStorage.setItem(
+      RUN_STATUS_STORAGE_KEY,
+      JSON.stringify({
+        'excel-analyst': createRunStatus({
+          state: 'running',
+          pending: true,
+          label: 'Waiting for agent output',
+          startedAt: staleTimestamp,
+          updatedAt: staleTimestamp,
+        }),
+      }),
+    )
+
+    fetchChat.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(createPayload()), 4000)
+        }),
+    )
+
+    render(<App />)
+
+    expect(JSON.parse(window.localStorage.getItem(RUN_STATUS_STORAGE_KEY))).toEqual({
+      'excel-analyst': null,
+      'pdf-agent': null,
+      'powerpoint-maker': null,
+    })
+    expect(JSON.parse(window.sessionStorage.getItem(RUN_STATUS_STORAGE_KEY))).toEqual({
+      'excel-analyst': null,
+      'pdf-agent': null,
+      'powerpoint-maker': null,
+    })
+    expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
+    expect(fetchChat).toHaveBeenCalledTimes(3)
+
+    await act(async () => {
+      vi.advanceTimersByTime(3100)
+    })
+
+    expect(fetchChat).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps showing pending ticker when backend sends a transient idle snapshot without output', async () => {
+    vi.useFakeTimers()
+    let excelFetchCount = 0
+
+    fetchChat.mockImplementation(
+      ({ agent }) =>
+        new Promise((resolve) => {
+          setTimeout(
+            () =>
+              resolve(agent === 'Excel Analyst'
+                ? (() => {
+                    excelFetchCount += 1
+
+                    return excelFetchCount === 1
+                      ? createPayload({
+                          pending: true,
+                          runStatus: createRunStatus({
+                            state: 'running',
+                            pending: true,
+                            label: 'Waiting for agent output',
+                          }),
+                          messages: [
+                            { role: 'user', text: 'Need a summary', timestamp: '2026-03-06T12:00:00.000Z' },
+                          ],
+                        })
+                      : createPayload({
+                          pending: false,
+                          runStatus: createRunStatus({
+                            state: 'idle',
+                            pending: false,
+                            label: 'Idle',
+                          }),
+                          messages: [],
+                        })
+                  })()
+                : createPayload()),
+            50,
+          )
+        }),
+    )
+
+    render(<App />)
+    expect(fetchChat).toHaveBeenCalledTimes(3)
+
+    await act(async () => {
+      vi.advanceTimersByTime(60)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getAllByRole('button', { name: /Excel Analyst/i })[0]).toHaveTextContent('Busy')
+
+    await act(async () => {
+      vi.advanceTimersByTime(3100)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(fetchChat).toHaveBeenCalledTimes(4)
+    expect(screen.getAllByRole('button', { name: /Excel Analyst/i })[0]).toHaveTextContent('Busy')
+  })
+
   it('shows a task-specific ticker label for pending Word generation', async () => {
     const user = userEvent.setup()
 
@@ -421,6 +598,9 @@ describe('App chat flow', () => {
 
     expect(clearButton).toBeDisabled()
     expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
+    expect(postChat).not.toHaveBeenCalled()
+    expect(pollForChatCompletion).not.toHaveBeenCalled()
+    expect(uploadFiles).not.toHaveBeenCalled()
 
     await act(async () => {
       resolveClear({ ok: true })
@@ -532,6 +712,35 @@ describe('App chat flow', () => {
       'href',
       'https://api.golemforce.ai/files/artifact-1',
     )
+  })
+
+  it('surfaces an upload file-id error and skips chat dispatch when upload returns no ids', async () => {
+    const user = userEvent.setup()
+
+    uploadFiles.mockResolvedValue({
+      uploaded: [
+        {
+          name: 'brief.xlsx',
+          size: 14,
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        },
+      ],
+    })
+
+    const { container } = render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    const fileInput = container.querySelector('input[type="file"]')
+    const workbook = new File(['a,b\n1,2'], 'brief.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+
+    await user.upload(fileInput, workbook)
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect((await screen.findAllByText(/Upload completed without returning a file id\./i)).length).toBeGreaterThan(0)
+    expect(postChat).not.toHaveBeenCalled()
+    expect(pollForChatCompletion).not.toHaveBeenCalled()
   })
 
   it('keeps uploaded files downloadable after switching between agent screens', async () => {

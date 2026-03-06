@@ -49,6 +49,7 @@ const DEFAULT_BUILDING_PRESENTATION_STATUS = 'Building presentation'
 const CHAT_REQUEST_TIMEOUT_MS = 3000
 const DIRECT_CHAT_RESPONSE_WAIT_MS = 250
 const POLL_TIMEOUT_MS = 120000
+const STALE_PENDING_RUN_STATUS_MAX_AGE_MS = 60 * 60 * 1000
 
 const GENERIC_PENDING_STATUS_HINTS = new Set([
   'queued',
@@ -134,16 +135,40 @@ const shouldRetainPendingRunStatus = (previousRunStatus, nextRunStatus, payload)
     return false
   }
 
-  const startedAtMs = Date.parse(previousRunStatus.startedAt || '')
-
-  if (Number.isFinite(startedAtMs) && Date.now() - startedAtMs > 20000) {
-    return false
-  }
-
   const hasMessages = normalizeBackendMessages(payload).length > 0
   const hasArtifacts = extractNewArtifacts(payload).length > 0
 
   return !hasMessages && !hasArtifacts
+}
+
+const getRunStatusTimestampMs = (runStatus) => {
+  const updatedAtMs = Date.parse(runStatus?.updatedAt || '')
+
+  if (Number.isFinite(updatedAtMs)) {
+    return updatedAtMs
+  }
+
+  const startedAtMs = Date.parse(runStatus?.startedAt || '')
+
+  if (Number.isFinite(startedAtMs)) {
+    return startedAtMs
+  }
+
+  return null
+}
+
+const isStalePendingRunStatus = (runStatus) => {
+  if (!runStatus?.pending) {
+    return false
+  }
+
+  const timestampMs = getRunStatusTimestampMs(runStatus)
+
+  if (!Number.isFinite(timestampMs)) {
+    return false
+  }
+
+  return Date.now() - timestampMs > STALE_PENDING_RUN_STATUS_MAX_AGE_MS
 }
 
 const haveSameConversationMessages = (currentMessages = [], nextMessages = []) => {
@@ -162,6 +187,41 @@ const payloadHasAssistantText = (payload, previousAssistantCount = 0) =>
   || normalizeBackendMessages(payload).some(
     (message) => message.role === 'assistant' && typeof message.text === 'string' && message.text.trim(),
   )
+
+const getStartedAtTimestampMs = (runStatus) => {
+  const startedAtMs = Date.parse(runStatus?.startedAt || '')
+
+  return Number.isFinite(startedAtMs) && startedAtMs > 0 ? startedAtMs : null
+}
+
+const preservePendingRunStartedAt = (previousRunStatus, nextRunStatus) => {
+  if (!nextRunStatus?.pending) {
+    return nextRunStatus
+  }
+
+  const previousStartedAtMs = getStartedAtTimestampMs(previousRunStatus)
+  const nextStartedAtMs = getStartedAtTimestampMs(nextRunStatus)
+
+  if (Number.isFinite(previousStartedAtMs) && !Number.isFinite(nextStartedAtMs)) {
+    return {
+      ...nextRunStatus,
+      startedAt: previousRunStatus.startedAt,
+    }
+  }
+
+  if (
+    Number.isFinite(previousStartedAtMs)
+    && Number.isFinite(nextStartedAtMs)
+    && previousStartedAtMs < nextStartedAtMs
+  ) {
+    return {
+      ...nextRunStatus,
+      startedAt: previousRunStatus.startedAt,
+    }
+  }
+
+  return nextRunStatus
+}
 
 const createEmptyConversations = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, []]))
@@ -745,6 +805,16 @@ export default function App() {
   const copy = translations[language] ?? translations.en
   const copyRef = useRef(copy)
   const getChatCopy = useCallback(() => copyRef.current?.chat ?? translations.en.chat, [])
+  const resolveNextRunStatus = useCallback((previousRunStatus, nextRunStatus, payload) => {
+    if (shouldRetainPendingRunStatus(previousRunStatus, nextRunStatus, payload)) {
+      return {
+        ...previousRunStatus,
+        updatedAt: new Date().toISOString(),
+      }
+    }
+
+    return preservePendingRunStartedAt(previousRunStatus, nextRunStatus)
+  }, [])
   const updateConversationFromPayload = useCallback((agentId, payload, fileOnlyText) => {
     setConversations((prev) => {
       const currentMessages = prev[agentId] ?? []
@@ -914,12 +984,7 @@ export default function App() {
 
             const nextRunStatus = extractDisplayRunStatus(agentId, payload)
 
-            next[agentId] = shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, payload)
-              ? {
-                  ...prev[agentId],
-                  updatedAt: new Date().toISOString(),
-                }
-              : nextRunStatus
+            next[agentId] = resolveNextRunStatus(prev[agentId], nextRunStatus, payload)
           })
 
           return next
@@ -996,18 +1061,11 @@ export default function App() {
 
                   setRunStatusByAgent((prev) => ({
                     ...prev,
-                    [agentId]: (() => {
-                      const nextRunStatus = extractDisplayRunStatus(agentId, nextPayload)
-
-                      if (shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, nextPayload)) {
-                        return {
-                          ...prev[agentId],
-                          updatedAt: new Date().toISOString(),
-                        }
-                      }
-
-                      return nextRunStatus
-                    })(),
+                    [agentId]: resolveNextRunStatus(
+                      prev[agentId],
+                      extractDisplayRunStatus(agentId, nextPayload),
+                      nextPayload,
+                    ),
                   }))
                 },
               })
@@ -1064,7 +1122,7 @@ export default function App() {
                       ),
                       updatedAt: new Date().toISOString(),
                     }
-                  : finalRunStatus,
+                  : resolveNextRunStatus(prev[agentId], finalRunStatus, finalPayload),
               }))
 
               if (shouldTreatAsCompleted) {
@@ -1107,7 +1165,7 @@ export default function App() {
     return () => {
       isDisposed = true
     }
-  }, [extractDisplayRunStatus, getChatCopy, setTaskStatusLabel, updateConversationFromPayload])
+  }, [extractDisplayRunStatus, getChatCopy, resolveNextRunStatus, setTaskStatusLabel, updateConversationFromPayload])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1203,12 +1261,7 @@ export default function App() {
 
           const nextRunStatus = extractDisplayRunStatus(agentId, payload)
 
-          next[agentId] = shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, payload)
-            ? {
-                ...prev[agentId],
-                updatedAt: new Date().toISOString(),
-              }
-            : nextRunStatus
+          next[agentId] = resolveNextRunStatus(prev[agentId], nextRunStatus, payload)
         })
 
         return next
@@ -1242,7 +1295,14 @@ export default function App() {
       isDisposed = true
       window.clearTimeout(timeoutId)
     }
-  }, [extractDisplayRunStatus, getChatCopy, runStatusByAgent, sendingByAgent, setTaskStatusLabel])
+  }, [
+    extractDisplayRunStatus,
+    getChatCopy,
+    resolveNextRunStatus,
+    runStatusByAgent,
+    sendingByAgent,
+    setTaskStatusLabel,
+  ])
 
   const agents = useMemo(() => {
     const localizedAgents = buildAgents(language).filter(
@@ -1568,12 +1628,7 @@ export default function App() {
 
             return {
               ...prev,
-              [agentId]: shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, finalPayload)
-                ? {
-                    ...prev[agentId],
-                    updatedAt: new Date().toISOString(),
-                  }
-                : nextRunStatus,
+              [agentId]: resolveNextRunStatus(prev[agentId], nextRunStatus, finalPayload),
             }
           })
         }
@@ -1626,12 +1681,7 @@ export default function App() {
 
               return {
                 ...prev,
-                [agentId]: shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, payload)
-                  ? {
-                      ...prev[agentId],
-                      updatedAt: new Date().toISOString(),
-                    }
-                  : nextRunStatus,
+                [agentId]: resolveNextRunStatus(prev[agentId], nextRunStatus, payload),
               }
             })
           },
@@ -1648,12 +1698,7 @@ export default function App() {
 
               return {
                 ...prev,
-                [agentId]: shouldRetainPendingRunStatus(prev[agentId], nextRunStatus, polledPayload)
-                  ? {
-                      ...prev[agentId],
-                      updatedAt: new Date().toISOString(),
-                    }
-                  : nextRunStatus,
+                [agentId]: resolveNextRunStatus(prev[agentId], nextRunStatus, polledPayload),
               }
             })
           }
@@ -1710,19 +1755,22 @@ export default function App() {
       setRunStatusByAgent((prev) => ({
         ...prev,
         [agentId]: isStillPending
-          ? resolvePendingRunStatus(agentId, {
-              ...(prev[agentId] ?? {}),
-              ...finalRunStatus,
-              state: 'running',
-              pending: true,
-              label:
-                taskStatusLabelByAgentRef.current[agentId]
-                || finalRunStatus?.label
-                || chatCopy.runningStatus,
-              error: null,
-              hasUploads: fileIds.length > 0 || finalRunStatus?.hasUploads,
-              updatedAt: new Date().toISOString(),
-            })
+          ? preservePendingRunStartedAt(
+              prev[agentId],
+              resolvePendingRunStatus(agentId, {
+                ...(prev[agentId] ?? {}),
+                ...finalRunStatus,
+                state: 'running',
+                pending: true,
+                label:
+                  taskStatusLabelByAgentRef.current[agentId]
+                  || finalRunStatus?.label
+                  || chatCopy.runningStatus,
+                error: null,
+                hasUploads: fileIds.length > 0 || finalRunStatus?.hasUploads,
+                updatedAt: new Date().toISOString(),
+              }),
+            )
           : {
               ...finalRunStatus,
               state: 'completed',
