@@ -201,6 +201,60 @@ describe('App chat flow', () => {
     expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
   })
 
+  it('renders pending assistant text from the initial chat response without waiting for the next poll', async () => {
+    const user = userEvent.setup()
+    let resolvePoll
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'running',
+          pending: true,
+          label: 'Waiting for agent output',
+        }),
+        messages: [
+          { role: 'assistant', text: 'I am drafting the file now.', timestamp: '2026-03-05T10:05:01.000Z' },
+        ],
+      }),
+    )
+
+    pollForChatCompletion.mockImplementation(
+      async () =>
+        await new Promise((resolve) => {
+          resolvePoll = () =>
+            resolve(
+              createPayload({
+                pending: false,
+                runStatus: createRunStatus({
+                  state: 'completed',
+                  pending: false,
+                  label: 'Completed',
+                }),
+                messages: [
+                  { role: 'assistant', text: 'I am drafting the file now.', timestamp: '2026-03-05T10:05:01.000Z' },
+                ],
+              }),
+            )
+        }),
+    )
+
+    render(<App />)
+
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    await user.type(getComposerInput(), 'Prepare the file')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('Prepare the file')).toBeInTheDocument()
+    expect(await screen.findByText('I am drafting the file now.')).toBeInTheDocument()
+    expect(screen.getByText('Waiting for agent output')).toBeInTheDocument()
+
+    await act(async () => {
+      resolvePoll()
+    })
+  })
+
   it('restores a pending agent status after returning with a cleared tab session', async () => {
     const createPendingHydrationPayload = (agent) =>
       agent === 'Excel Analyst'
@@ -679,6 +733,97 @@ describe('App chat flow', () => {
     expect((await screen.findAllByText('Summary is ready.')).length).toBeGreaterThan(0)
     expect(screen.getByText('Waiting for agent output')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /Excel Analyst/i })[0]).toHaveTextContent('Busy')
+  })
+
+  it('renders a pending assistant delta even when polling returns only the new assistant message', async () => {
+    const user = userEvent.setup()
+    let resolvePoll
+
+    fetchChat.mockImplementation(({ agent }) =>
+      Promise.resolve(
+        agent === 'Excel Analyst'
+          ? createPayload({
+              pending: false,
+              runStatus: createRunStatus({
+                state: 'completed',
+                pending: false,
+                label: 'Completed',
+              }),
+              messages: [
+                { role: 'user', text: 'Old request', timestamp: '2026-03-05T11:00:00.000Z' },
+                { role: 'assistant', text: 'Old answer', timestamp: '2026-03-05T11:00:01.000Z' },
+              ],
+            })
+          : createPayload(),
+      ),
+    )
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: true,
+        runStatus: createRunStatus({
+          state: 'queued',
+          pending: true,
+          label: 'Queued',
+        }),
+      }),
+    )
+
+    pollForChatCompletion.mockImplementation(async ({ onUpdate }) => {
+      onUpdate(
+        createPayload({
+          pending: true,
+          runStatus: createRunStatus({
+            state: 'running',
+            pending: true,
+            label: 'Waiting for agent output',
+          }),
+          messages: [
+            {
+              role: 'assistant',
+              text: 'I am generating the file now.',
+              timestamp: '2026-03-05T11:05:01.000Z',
+            },
+          ],
+        }),
+      )
+
+      return await new Promise((resolve) => {
+        resolvePoll = () =>
+          resolve(
+            createPayload({
+              pending: false,
+              runStatus: createRunStatus({
+                state: 'completed',
+                pending: false,
+                label: 'Completed',
+              }),
+              messages: [
+                {
+                  role: 'assistant',
+                  text: 'I am generating the file now.',
+                  timestamp: '2026-03-05T11:05:01.000Z',
+                },
+              ],
+            }),
+          )
+      })
+    })
+
+    render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+    expect((await screen.findAllByText('Old answer')).length).toBeGreaterThan(0)
+
+    await user.type(getComposerInput(), 'Prepare a new file')
+    await user.click(screen.getByLabelText('Send message'))
+
+    expect(await screen.findByText('Prepare a new file')).toBeInTheDocument()
+    expect(await screen.findByText('I am generating the file now.')).toBeInTheDocument()
+    expect(screen.getByText('Waiting for agent output')).toBeInTheDocument()
+
+    await act(async () => {
+      resolvePoll()
+    })
   })
 
   it('keeps earlier uploaded files visible after later non-file replies', async () => {

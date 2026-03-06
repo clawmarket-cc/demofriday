@@ -24,6 +24,7 @@ import {
 } from './api/openclawProxy'
 import {
   appendMissingConversationMessages,
+  buildMessageExactSignature,
   buildMessageLooseSignature,
 } from './utils/messageMerge'
 
@@ -144,6 +145,23 @@ const shouldRetainPendingRunStatus = (previousRunStatus, nextRunStatus, payload)
 
   return !hasMessages && !hasArtifacts
 }
+
+const haveSameConversationMessages = (currentMessages = [], nextMessages = []) => {
+  if (currentMessages.length !== nextMessages.length) {
+    return false
+  }
+
+  return currentMessages.every(
+    (message, index) =>
+      buildMessageExactSignature(message) === buildMessageExactSignature(nextMessages[index]),
+  )
+}
+
+const payloadHasAssistantText = (payload, previousAssistantCount = 0) =>
+  Boolean(extractAssistantText(payload, previousAssistantCount))
+  || normalizeBackendMessages(payload).some(
+    (message) => message.role === 'assistant' && typeof message.text === 'string' && message.text.trim(),
+  )
 
 const createEmptyConversations = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, []]))
@@ -724,6 +742,26 @@ export default function App() {
   const copy = translations[language] ?? translations.en
   const copyRef = useRef(copy)
   const getChatCopy = useCallback(() => copyRef.current?.chat ?? translations.en.chat, [])
+  const updateConversationFromPayload = useCallback((agentId, payload, fileOnlyText) => {
+    setConversations((prev) => {
+      const currentMessages = prev[agentId] ?? []
+      const nextMessages = buildConversationFromPayload(
+        agentId,
+        payload,
+        currentMessages,
+        fileOnlyText,
+      )
+
+      if (haveSameConversationMessages(currentMessages, nextMessages)) {
+        return prev
+      }
+
+      return {
+        ...prev,
+        [agentId]: nextMessages,
+      }
+    })
+  }, [])
   const setTaskStatusLabel = useCallback((agentId, label) => {
     if (!agentId) {
       return
@@ -946,15 +984,7 @@ export default function App() {
                     normalizedMessageCount > 0 ||
                     (artifacts.length > 0 && nextRunStatus.pending === false)
                   ) {
-                    setConversations((prev) => ({
-                      ...prev,
-                      [agentId]: buildConversationFromPayload(
-                        agentId,
-                        nextPayload,
-                        prev[agentId] ?? [],
-                        getFileReadyResponse(),
-                      ),
-                    }))
+                    updateConversationFromPayload(agentId, nextPayload, getFileReadyResponse())
                   }
 
                   setRunStatusByAgent((prev) => ({
@@ -985,15 +1015,7 @@ export default function App() {
               const chatCopy = getChatCopy()
 
               if (normalizeBackendMessages(finalPayload).length > 0 || artifacts.length > 0) {
-                setConversations((prev) => ({
-                  ...prev,
-                  [agentId]: buildConversationFromPayload(
-                    agentId,
-                    finalPayload,
-                    prev[agentId] ?? [],
-                    getFileReadyResponse(),
-                  ),
-                }))
+                updateConversationFromPayload(agentId, finalPayload, getFileReadyResponse())
               } else if (assistantText || artifacts.length > 0) {
                 const fallbackText =
                   artifacts.length > 0
@@ -1078,7 +1100,7 @@ export default function App() {
     return () => {
       isDisposed = true
     }
-  }, [extractDisplayRunStatus, getChatCopy, setTaskStatusLabel])
+  }, [extractDisplayRunStatus, getChatCopy, setTaskStatusLabel, updateConversationFromPayload])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1514,6 +1536,26 @@ export default function App() {
 
       if (finalPayload) {
         if (isCurrentConversation()) {
+          const hasDirectAssistantUpdate = payloadHasAssistantText(
+            finalPayload,
+            previousAssistantCount,
+          )
+          const normalizedMessageCount = normalizeBackendMessages(finalPayload).length
+          const shouldRenderMessages =
+            hasDirectAssistantUpdate
+            || (directRunStatus?.pending === false && normalizedMessageCount > 0)
+          const shouldRenderArtifacts =
+            artifacts.length > 0
+            && (directRunStatus?.pending === false || hasDirectAssistantUpdate)
+
+          if (shouldRenderMessages || shouldRenderArtifacts) {
+            updateConversationFromPayload(
+              agentId,
+              finalPayload,
+              getChatCopy().fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+            )
+          }
+
           setRunStatusByAgent((prev) => {
             const nextRunStatus = directRunStatus
 
@@ -1558,25 +1600,18 @@ export default function App() {
             const normalizedMessageCount = normalizeBackendMessages(payload).length
             const artifacts = extractNewArtifacts(payload)
             const runStatus = extractDisplayRunStatus(agentId, payload)
-            const hasAssistantTextUpdate = Boolean(
-              extractAssistantText(payload, previousAssistantCount),
-            )
-            const hasNewMessages = normalizedMessageCount > clientMessageCount
+            const hasAssistantTextUpdate = payloadHasAssistantText(payload, previousAssistantCount)
             const shouldRenderMessages =
-              hasNewMessages && (hasAssistantTextUpdate || runStatus.pending === false)
+              hasAssistantTextUpdate || (runStatus.pending === false && normalizedMessageCount > 0)
             const shouldRenderArtifacts =
               artifacts.length > 0 && (runStatus.pending === false || hasAssistantTextUpdate)
 
             if (shouldRenderMessages || shouldRenderArtifacts) {
-              setConversations((prev) => ({
-                ...prev,
-                [agentId]: buildConversationFromPayload(
-                  agentId,
-                  payload,
-                  prev[agentId] ?? [],
-                  getChatCopy().fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
-                ),
-              }))
+              updateConversationFromPayload(
+                agentId,
+                payload,
+                getChatCopy().fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+              )
             }
 
             setRunStatusByAgent((prev) => {
@@ -1629,20 +1664,26 @@ export default function App() {
       const finalAssistantText = isFileOnlyAssistantMessage
         ? chatCopy.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE
         : assistantText || chatCopy.emptyAssistantResponse || DEFAULT_EMPTY_ASSISTANT_RESPONSE
+      const normalizedFinalMessageCount = finalPayload
+        ? normalizeBackendMessages(finalPayload).length
+        : 0
+      const hasAssistantTextInFinalPayload = finalPayload
+        ? payloadHasAssistantText(finalPayload, previousAssistantCount)
+        : false
 
       if (
         finalPayload
-        && (normalizeBackendMessages(finalPayload).length > clientMessageCount || artifacts.length > 0)
+        && (
+          normalizedFinalMessageCount > clientMessageCount
+          || artifacts.length > 0
+          || (hasAssistantTextInFinalPayload && normalizedFinalMessageCount > 0)
+        )
       ) {
-        setConversations((prev) => ({
-          ...prev,
-          [agentId]: buildConversationFromPayload(
-            agentId,
-            finalPayload,
-            prev[agentId] ?? [],
-            chatCopy.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
-          ),
-        }))
+        updateConversationFromPayload(
+          agentId,
+          finalPayload,
+          chatCopy.fileReadyResponse || DEFAULT_FILE_READY_RESPONSE,
+        )
       } else if (assistantText || artifacts.length > 0 || !isStillPending) {
         setConversations((prev) => ({
           ...prev,

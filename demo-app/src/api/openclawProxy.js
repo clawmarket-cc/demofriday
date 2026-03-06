@@ -1,5 +1,5 @@
 const DEFAULT_API_BASE_URL = 'https://api.golemforce.ai'
-const DEFAULT_POLL_INTERVAL_MS = 1500
+const DEFAULT_POLL_INTERVAL_MS = 750
 
 const trimTrailingSlashes = (value) => value.replace(/\/+$/, '')
 const isFormData = (value) => typeof FormData !== 'undefined' && value instanceof FormData
