@@ -641,7 +641,7 @@ describe('App chat flow', () => {
     expect(screen.queryByText(/still pending/i)).not.toBeInTheDocument()
   })
 
-  it('marks the run complete when assistant text is present even if backend pending remains true', async () => {
+  it('keeps the run pending when assistant text is present but backend is still running', async () => {
     const user = userEvent.setup()
 
     postChat.mockResolvedValue(
@@ -677,9 +677,8 @@ describe('App chat flow', () => {
     await user.click(screen.getByLabelText('Send message'))
 
     expect((await screen.findAllByText('Summary is ready.')).length).toBeGreaterThan(0)
-    await waitFor(() => {
-      expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
-    })
+    expect(screen.getByText('Waiting for agent output')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /Excel Analyst/i })[0]).toHaveTextContent('Busy')
   })
 
   it('keeps earlier uploaded files visible after later non-file replies', async () => {

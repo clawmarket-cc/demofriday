@@ -92,7 +92,7 @@ describe('openclawProxy polling', () => {
     expect(result.runStatus.pending).toBe(false)
   })
 
-  it('returns when completion signals appear even if backend pending remains true', async () => {
+  it('keeps polling after assistant text arrives until the backend clears pending', async () => {
     fetch
       .mockResolvedValueOnce(
         jsonResponse({
@@ -113,13 +113,39 @@ describe('openclawProxy polling', () => {
         jsonResponse({
           messages: [
             { role: 'user', text: 'Need summary', timestamp: '2026-03-05T09:10:00.000Z' },
-            { role: 'assistant', text: 'Summary is ready.', timestamp: '2026-03-05T09:10:01.000Z' },
+            {
+              role: 'assistant',
+              text: 'I am generating the file now.',
+              timestamp: '2026-03-05T09:10:01.000Z',
+            },
           ],
           pending: true,
           runStatus: createRunStatus({
             state: 'running',
             pending: true,
             label: 'Waiting for agent output',
+          }),
+          files: {
+            newArtifacts: [],
+            artifacts: [],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          messages: [
+            { role: 'user', text: 'Need summary', timestamp: '2026-03-05T09:10:00.000Z' },
+            {
+              role: 'assistant',
+              text: 'I am generating the file now.',
+              timestamp: '2026-03-05T09:10:01.000Z',
+            },
+          ],
+          pending: false,
+          runStatus: createRunStatus({
+            state: 'completed',
+            pending: false,
+            label: 'Completed',
           }),
           files: {
             newArtifacts: [],
@@ -134,12 +160,11 @@ describe('openclawProxy polling', () => {
       previousAssistantCount: 0,
       pollIntervalMs: 1,
       timeoutMs: 100,
-      completionSignalGracePolls: 0,
     })
 
-    expect(fetch).toHaveBeenCalledTimes(2)
-    expect(result.runStatus.pending).toBe(true)
-    expect(normalizeBackendMessages(result).at(-1)?.text).toBe('Summary is ready.')
+    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(result.runStatus.pending).toBe(false)
+    expect(normalizeBackendMessages(result).at(-1)?.text).toBe('I am generating the file now.')
   })
 
   it('normalizes backend messages for UI display', () => {

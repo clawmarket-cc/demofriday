@@ -17,7 +17,6 @@ import {
   extractNewArtifacts,
   extractRunStatus,
   fetchChat,
-  hasCompletionSignal,
   normalizeBackendMessages,
   pollForChatCompletion,
   postChat,
@@ -1016,13 +1015,7 @@ export default function App() {
                 }))
               }
 
-              const shouldTreatAsCompleted =
-                !finalRunStatus.pending
-                || hasCompletionSignal(
-                  finalPayload,
-                  previousAssistantCount,
-                  knownArtifactSignatures,
-                )
+              const shouldTreatAsCompleted = finalRunStatus.pending === false
 
               setRunStatusByAgent((prev) => ({
                 ...prev,
@@ -1630,11 +1623,7 @@ export default function App() {
       }
 
       const finalRunStatus = finalPayload ? extractDisplayRunStatus(agentId, finalPayload) : null
-      const runHasCompletionSignal = finalPayload
-        ? hasCompletionSignal(finalPayload, previousAssistantCount, knownArtifactSignatures)
-        : false
-      const isStillPending =
-        !finalPayload || (Boolean(finalRunStatus?.pending) && !runHasCompletionSignal)
+      const isStillPending = !finalPayload || Boolean(finalRunStatus?.pending)
       const isFileOnlyAssistantMessage = artifacts.length > 0 && !assistantText && !isStillPending
       const chatCopy = getChatCopy()
       const finalAssistantText = isFileOnlyAssistantMessage

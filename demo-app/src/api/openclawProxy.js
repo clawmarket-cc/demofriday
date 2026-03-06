@@ -473,17 +473,14 @@ export const pollForChatCompletion = async ({
   agentId,
   conversationId,
   previousAssistantCount,
-  knownArtifactSignatures = new Set(),
   timeoutMs = 60000,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   completionGracePolls = 2,
-  completionSignalGracePolls = 1,
   onUpdate,
 }) => {
   const deadline = Date.now() + timeoutMs
   let lastPayload = null
   let remainingCompletionGracePolls = Math.max(0, completionGracePolls)
-  let remainingCompletionSignalGracePolls = Math.max(0, completionSignalGracePolls)
 
   while (Date.now() < deadline) {
     const payload = await fetchChat({ agent: agent ?? agentId, conversationId, limit: 200 })
@@ -493,11 +490,6 @@ export const pollForChatCompletion = async ({
     const runStatus = extractRunStatus(payload)
     const assistantText = extractAssistantText(payload, previousAssistantCount)
     const artifacts = extractNewArtifacts(payload)
-    const completionSignal = hasCompletionSignal(
-      payload,
-      previousAssistantCount,
-      knownArtifactSignatures,
-    )
 
     if (runStatus.state === 'error') {
       throw new Error(runStatus.error || 'The backend run failed.')
@@ -512,18 +504,6 @@ export const pollForChatCompletion = async ({
       await delay(pollIntervalMs)
       continue
     }
-
-    if (completionSignal) {
-      if (remainingCompletionSignalGracePolls === 0) {
-        return payload
-      }
-
-      remainingCompletionSignalGracePolls -= 1
-      await delay(pollIntervalMs)
-      continue
-    }
-
-    remainingCompletionSignalGracePolls = Math.max(0, completionSignalGracePolls)
     await delay(pollIntervalMs)
   }
 
