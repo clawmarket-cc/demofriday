@@ -368,8 +368,21 @@ const persistRunStatusState = (runStatusByAgent) => {
   writeStorageValue(STORAGE_RUN_STATUS_KEY, JSON.stringify(runStatusByAgent))
 }
 
-const createInitialRunStatusState = () =>
-  Object.fromEntries(agentDefinitions.map((agent) => [agent.id, null]))
+const createInitialRunStatusState = () => {
+  const storedRunStatusByAgent = readStoredJson(STORAGE_RUN_STATUS_KEY, {})
+
+  return Object.fromEntries(
+    agentDefinitions.map((agent) => {
+      const runStatus = storedRunStatusByAgent?.[agent.id]
+
+      if (!runStatus || typeof runStatus !== 'object' || isStalePendingRunStatus(runStatus)) {
+        return [agent.id, null]
+      }
+
+      return [agent.id, runStatus]
+    }),
+  )
+}
 
 const resolveMessageText = (language, message) => {
   if (message.role !== 'assistant') {
