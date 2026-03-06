@@ -286,27 +286,30 @@ const readStoredJson = (key, fallback) => {
   }
 }
 
-const readStoredRunStatusState = () =>
-  readStoredJson(STORAGE_RUN_STATUS_KEY, {})
+const clearStorageValue = (key) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    try {
+      storage?.removeItem(key)
+    } catch {
+      // Ignore storage cleanup failures and continue.
+    }
+  }
+}
+
+const clearStoredRunStatusState = () => {
+  clearStorageValue(STORAGE_RUN_STATUS_KEY)
+}
 
 const persistRunStatusState = (runStatusByAgent) => {
   writeStorageValue(STORAGE_RUN_STATUS_KEY, JSON.stringify(runStatusByAgent))
 }
 
-const createInitialRunStatusState = () => {
-  const storedRunStatus = readStoredRunStatusState()
-
-  return Object.fromEntries(
-    agentDefinitions.map((agent) => {
-      const nextRunStatus = storedRunStatus?.[agent.id]
-
-      return [
-        agent.id,
-        nextRunStatus && typeof nextRunStatus === 'object' ? nextRunStatus : null,
-      ]
-    }),
-  )
-}
+const createInitialRunStatusState = () =>
+  Object.fromEntries(agentDefinitions.map((agent) => [agent.id, null]))
 
 const resolveMessageText = (language, message) => {
   if (message.role !== 'assistant') {
@@ -831,6 +834,10 @@ export default function App() {
   useEffect(() => {
     persistRuntimeConversations(conversations)
   }, [conversations])
+
+  useEffect(() => {
+    clearStoredRunStatusState()
+  }, [])
 
   useEffect(() => {
     persistRunStatusState(runStatusByAgent)

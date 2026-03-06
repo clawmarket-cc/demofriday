@@ -344,9 +344,10 @@ describe('App chat flow', () => {
 
     render(<App />)
 
-    expect(screen.getAllByRole('button', { name: /Excel Analyst/i })[0]).toHaveTextContent('Busy')
-
     await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /Excel Analyst/i })[0]).toHaveTextContent('Busy'),
+    )
     expect(secondConversationIds[0]).toBe(firstConversationId)
   })
 
