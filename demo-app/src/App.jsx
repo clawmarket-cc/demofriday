@@ -30,6 +30,7 @@ import {
 
 const STORAGE_CLIENT_ID_KEY = 'golemforce-chat-client-id'
 const STORAGE_CONVERSATION_IDS_KEY = 'golemforce-chat-conversation-ids'
+const STORAGE_RUN_STATUS_KEY = 'golemforce-chat-run-status'
 const STORAGE_RUNTIME_CONVERSATIONS_KEY = 'golemforce-chat-runtime-conversations'
 const RUNTIME_CONVERSATIONS_CACHE_KEY = '__golemforce-chat-runtime-conversations'
 const DEFAULT_THREAD_ID = 'main'
@@ -216,11 +217,79 @@ const createInitialSendingState = () =>
 const createInitialClearingState = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, false]))
 
-const createInitialRunStatusState = () =>
-  Object.fromEntries(agentDefinitions.map((agent) => [agent.id, null]))
-
 const createInitialPreviewState = () =>
   Object.fromEntries(agentDefinitions.map((agent) => [agent.id, null]))
+
+const readStorageValue = (key) => {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    try {
+      const value = storage?.getItem(key)
+
+      if (typeof value === 'string' && value.length > 0) {
+        return value
+      }
+    } catch {
+      // Ignore individual storage failures and fall back to the next store.
+    }
+  }
+
+  return null
+}
+
+const writeStorageValue = (key, value) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    try {
+      storage?.setItem(key, value)
+    } catch {
+      // Ignore storage write failures and keep the in-memory state.
+    }
+  }
+}
+
+const readStoredJson = (key, fallback) => {
+  const raw = readStorageValue(key)
+
+  if (!raw) {
+    return fallback
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+const readStoredRunStatusState = () =>
+  readStoredJson(STORAGE_RUN_STATUS_KEY, {})
+
+const persistRunStatusState = (runStatusByAgent) => {
+  writeStorageValue(STORAGE_RUN_STATUS_KEY, JSON.stringify(runStatusByAgent))
+}
+
+const createInitialRunStatusState = () => {
+  const storedRunStatus = readStoredRunStatusState()
+
+  return Object.fromEntries(
+    agentDefinitions.map((agent) => {
+      const nextRunStatus = storedRunStatus?.[agent.id]
+
+      return [
+        agent.id,
+        nextRunStatus && typeof nextRunStatus === 'object' ? nextRunStatus : null,
+      ]
+    }),
+  )
+}
 
 const resolveMessageText = (language, message) => {
   if (message.role !== 'assistant') {
@@ -248,11 +317,11 @@ const getClientId = () => {
   }
 
   try {
-    const existing = window.sessionStorage.getItem(STORAGE_CLIENT_ID_KEY)
+    const existing = readStorageValue(STORAGE_CLIENT_ID_KEY)
     const clientId = existing || createClientId()
 
     if (!existing) {
-      window.sessionStorage.setItem(STORAGE_CLIENT_ID_KEY, clientId)
+      writeStorageValue(STORAGE_CLIENT_ID_KEY, clientId)
     }
 
     return `${clientId}:${DEFAULT_THREAD_ID}`
@@ -269,34 +338,12 @@ const buildConversationId = (agentId, clientId = getClientId()) => {
 }
 
 const readStoredConversationIds = () => {
-  if (typeof window === 'undefined') {
-    return {}
-  }
-
-  try {
-    const raw = window.sessionStorage.getItem(STORAGE_CONVERSATION_IDS_KEY)
-
-    if (!raw) {
-      return {}
-    }
-
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return {}
-  }
+  const parsed = readStoredJson(STORAGE_CONVERSATION_IDS_KEY, {})
+  return parsed && typeof parsed === 'object' ? parsed : {}
 }
 
 const persistConversationIds = (conversationIds) => {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  try {
-    window.sessionStorage.setItem(STORAGE_CONVERSATION_IDS_KEY, JSON.stringify(conversationIds))
-  } catch {
-    // Ignore sessionStorage persistence failures and keep the in-memory ids.
-  }
+  writeStorageValue(STORAGE_CONVERSATION_IDS_KEY, JSON.stringify(conversationIds))
 }
 
 const createInitialConversationIds = () => {
@@ -747,6 +794,10 @@ export default function App() {
   useEffect(() => {
     persistRuntimeConversations(conversations)
   }, [conversations])
+
+  useEffect(() => {
+    persistRunStatusState(runStatusByAgent)
+  }, [runStatusByAgent])
 
   useEffect(() => {
     let isDisposed = false

@@ -2,8 +2,10 @@ const SPREADSHEET_EXTENSIONS = new Set(['xls', 'xlsx'])
 const PDF_EXTENSIONS = new Set(['pdf'])
 const WORD_EXTENSIONS = new Set(['doc', 'docx'])
 const PRESENTATION_EXTENSIONS = new Set(['ppt', 'pptx'])
+const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown'])
 const DOCX_EXTENSIONS = new Set(['docx'])
 const PPTX_EXTENSIONS = new Set(['pptx'])
+const MARKDOWN_TYPES = new Set(['text/markdown', 'text/x-markdown'])
 const DOCX_TYPES = new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document'])
 const PPTX_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -42,6 +44,10 @@ export const getPreviewKind = (file) => {
 
   if (type === 'application/pdf' || PDF_EXTENSIONS.has(extension)) {
     return 'pdf'
+  }
+
+  if (MARKDOWN_TYPES.has(type) || MARKDOWN_EXTENSIONS.has(extension)) {
+    return 'markdown'
   }
 
   if (
@@ -90,6 +96,7 @@ export const supportsInlinePreview = (file) => {
 
   return (
     kind === 'pdf'
+    || kind === 'markdown'
     || kind === 'spreadsheet'
     || supportsStructuredDocumentPreview(file)
     || supportsStructuredPresentationPreview(file)

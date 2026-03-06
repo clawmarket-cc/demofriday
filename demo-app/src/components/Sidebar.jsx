@@ -48,7 +48,7 @@ export default function Sidebar({
           const isActive = activeAgentId === agent.id
           const lastMsg = conversations[agent.id]?.slice(-1)[0]
           const { color: statusColor, label: statusLabel } = getStatusMeta(agent.status, statusLabels)
-          const isResponding = agent.status === 'busy' && lastMsg?.role === 'user'
+          const isResponding = agent.status === 'busy'
           const lastSnippet =
             lastMsg?.text ||
             (lastMsg?.file

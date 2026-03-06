@@ -60,7 +60,7 @@ const RUNTIME_CONVERSATIONS_CACHE_KEY = '__golemforce-chat-runtime-conversations
 const DOCX_PREVIEW_FIXTURE =
   'UEsDBBQAAAAIABYGZlyn3//Y5QAAAGkBAAARAAAAd29yZC9kb2N1bWVudC54bWxNkEluxCAQRfd9ihJSljF2FEWRZdO7KMvOdABiV7otQYEA2+H2AZweVrwS//8auv2vVrCg85OhnjVVzQBpMONEx559fb7cPzPwQdIolSHsWUTP9mLXre1ohlkjBUgJ5Nu1Z6cQbMu5H06opa+MRUp/P8ZpGVLpjnw1brTODOh9aqAVf6jrJ67lREzsAFLqtxljxlLYjTY+OJGfjxAVwtouUvXsFWWetGFcdHzTXB1FH8TbLF1ApyIclKQsC0X8Ly2+m45X4zsuSDPC5GG20DzeQUTpwKRrFapusy4xGbYlMp2PJP4AUEsBAhQAFAAAAAgAFgZmXKff/9jlAAAAaQEAABEAAAAAAAAAAAAAAAAAAAAAAHdvcmQvZG9jdW1lbnQueG1sUEsFBgAAAAABAAEAPwAAABQBAAAAAA=='
 const PPTX_PREVIEW_FIXTURE =
-  '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'
+  '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'
 const decodeBase64ToArrayBuffer = (value) => Uint8Array.from(Buffer.from(value, 'base64')).buffer
 const createWorkbookPreviewBuffer = () => {
   const workbook = XLSX.utils.book_new()
@@ -187,6 +187,63 @@ describe('App chat flow', () => {
     })
 
     expect(screen.queryByText('Waiting for agent output')).not.toBeInTheDocument()
+  })
+
+  it('restores a pending agent status after returning with a cleared tab session', async () => {
+    const createPendingHydrationPayload = (agent) =>
+      agent === 'Excel Analyst'
+        ? createPayload({
+            pending: true,
+            runStatus: createRunStatus({
+              state: 'running',
+              pending: true,
+              label: 'Waiting for agent output',
+            }),
+            messages: [
+              { role: 'user', text: 'Need a summary', timestamp: '2026-03-06T12:00:00.000Z' },
+            ],
+          })
+        : createPayload()
+
+    const firstConversationIds = []
+
+    fetchChat.mockImplementation(({ agent, conversationId }) => {
+      if (agent === 'Excel Analyst') {
+        firstConversationIds.push(conversationId)
+      }
+
+      return Promise.resolve(createPendingHydrationPayload(agent))
+    })
+
+    const firstRender = render(<App />)
+
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /Excel Analyst/i })[0]).toHaveTextContent('Busy'),
+    )
+
+    const firstConversationId = firstConversationIds[0]
+
+    firstRender.unmount()
+    window.sessionStorage.clear()
+    delete window[RUNTIME_CONVERSATIONS_CACHE_KEY]
+
+    const secondConversationIds = []
+    fetchChat.mockClear()
+    fetchChat.mockImplementation(({ agent, conversationId }) => {
+      if (agent === 'Excel Analyst') {
+        secondConversationIds.push(conversationId)
+      }
+
+      return Promise.resolve(createPendingHydrationPayload(agent))
+    })
+
+    render(<App />)
+
+    expect(screen.getAllByRole('button', { name: /Excel Analyst/i })[0]).toHaveTextContent('Busy')
+
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+    expect(secondConversationIds[0]).toBe(firstConversationId)
   })
 
   it('shows a task-specific ticker label for pending Word generation', async () => {
@@ -885,6 +942,82 @@ describe('App chat flow', () => {
       'https://api.golemforce.ai/files/artifact-preview-pdf',
     )
     expect(screen.getByRole('tab', { name: 'Details' })).toBeInTheDocument()
+  })
+
+  it('accepts uploaded markdown files and previews them inline', async () => {
+    const user = userEvent.setup()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      text: async () =>
+        '# Revenue Brief\n\n**Summary**\n- ARR expanded 18% year over year.\n1. Expand enterprise pipeline.',
+    })
+
+    uploadFiles.mockResolvedValue({
+      uploaded: [
+        {
+          id: 'upload-md-1',
+          name: 'briefing.md',
+          size: 64,
+          type: 'text/markdown',
+          downloadUrl: '/files/upload-md-1',
+        },
+      ],
+    })
+
+    postChat.mockResolvedValue(
+      createPayload({
+        pending: false,
+        runStatus: createRunStatus({
+          state: 'completed',
+          pending: false,
+          label: 'Completed',
+          hasUploads: true,
+        }),
+        messages: [
+          {
+            role: 'assistant',
+            text: 'I reviewed the markdown notes.',
+            timestamp: '2026-03-05T17:20:01.000Z',
+          },
+        ],
+      }),
+    )
+
+    const { container } = render(<App />)
+    await waitFor(() => expect(fetchChat).toHaveBeenCalledTimes(3))
+
+    const fileInput = container.querySelector('input[type="file"]')
+    const markdownFile = new File(['# Revenue Brief'], 'briefing.md', {
+      type: 'text/markdown',
+    })
+
+    await user.upload(fileInput, markdownFile)
+    await user.type(getComposerInput(), 'Review these markdown notes')
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => {
+      expect(uploadFiles).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: 'Excel Analyst',
+          files: [markdownFile],
+        }),
+      )
+    })
+
+    expect(await screen.findByText('briefing.md')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+
+    expect(await screen.findByRole('heading', { name: 'briefing.md' })).toBeInTheDocument()
+    expect(await screen.findByText('Revenue Brief')).toBeInTheDocument()
+    expect(screen.getByText('ARR expanded 18% year over year.')).toBeInTheDocument()
+    expect(screen.getByText('Expand enterprise pipeline.')).toBeInTheDocument()
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/files/upload-md-1',
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    )
   })
 
   it('opens a Word document preview with extracted text in the right-side panel', async () => {

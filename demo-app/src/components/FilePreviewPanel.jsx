@@ -23,6 +23,7 @@ const defaultPreviewText = {
   previewLoadError: 'Preview could not be loaded.',
   previewOpenLabel: 'Download',
   previewKindPdf: 'PDF',
+  previewKindMarkdown: 'Markdown',
   previewKindSpreadsheet: 'Spreadsheet',
   previewKindDocument: 'Document',
   previewKindPresentation: 'Presentation',
@@ -34,11 +35,13 @@ const defaultPreviewText = {
   previewSizeLabel: 'Size',
   previewRowsLabel: 'Rows',
   previewColumnsLabel: 'Columns',
+  previewLinesLabel: 'Lines',
   previewSheetsLabel: 'Sheets',
   previewSlidesLabel: 'Slides',
   previewParagraphsLabel: 'Paragraphs',
   previewWordsLabel: 'Words',
   previewSheetEmpty: 'This sheet is empty.',
+  previewMarkdownEmpty: 'This markdown file is empty.',
   previewDocumentEmpty: 'This document does not contain extractable text.',
   previewPresentationEmpty: 'This presentation does not contain extractable text.',
   previewSlideEmpty: 'This slide does not contain extractable text.',
@@ -58,6 +61,14 @@ const createInitialSpreadsheetState = () => ({
   error: '',
 })
 
+const createInitialMarkdownState = () => ({
+  status: 'idle',
+  text: '',
+  lineCount: 0,
+  wordCount: 0,
+  error: '',
+})
+
 const createInitialDocumentState = () => ({
   status: 'idle',
   blocks: [],
@@ -72,6 +83,8 @@ const createInitialPresentationState = () => ({
   error: '',
 })
 
+const countWords = (value = '') => value.match(/[^\s]+/g)?.length ?? 0
+
 const loadBinaryFile = async (downloadUrl, signal) => {
   const response = await fetch(downloadUrl, { signal })
 
@@ -80,6 +93,16 @@ const loadBinaryFile = async (downloadUrl, signal) => {
   }
 
   return response.arrayBuffer()
+}
+
+const loadTextFile = async (downloadUrl, signal) => {
+  const response = await fetch(downloadUrl, { signal })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+
+  return response.text()
 }
 
 const getSourceLabel = (copy, source) => {
@@ -92,6 +115,7 @@ const getSourceLabel = (copy, source) => {
 
 const getKindLabel = (copy, kind) => {
   if (kind === 'pdf') return copy.previewKindPdf
+  if (kind === 'markdown') return copy.previewKindMarkdown
   if (kind === 'spreadsheet') return copy.previewKindSpreadsheet
   if (kind === 'document') return copy.previewKindDocument
   if (kind === 'presentation') return copy.previewKindPresentation
@@ -123,6 +147,119 @@ const getSlideTabLabel = (copy, slide) => {
   }
 
   return `${title.slice(0, 19).trimEnd()}...`
+}
+
+const renderMarkdownInline = (text) => {
+  const parts = text.split(/(\*\*.*?\*\*)/g)
+
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return (
+        <strong key={index} className="rich-strong">
+          {part.slice(2, -2)}
+        </strong>
+      )
+    }
+
+    return part
+  })
+}
+
+const renderMarkdown = (text) => {
+  const parts = text.split(/(```[\s\S]*?```|(?:\|.*\|\n?)+)/g)
+
+  return parts.flatMap((part, partIndex) => {
+    if (!part) {
+      return []
+    }
+
+    if (part.startsWith('```') && part.endsWith('```')) {
+      const code = part.slice(3, -3).replace(/^\w*\n/, '')
+
+      return (
+        <pre key={`code-${partIndex}`} className="rich-code">
+          {code}
+        </pre>
+      )
+    }
+
+    if (part.startsWith('|') && part.includes('\n')) {
+      const rows = part
+        .split('\n')
+        .filter((row) => row.trim() && !row.match(/^\|[-\s|]+\|$/))
+
+      if (rows.length > 0) {
+        return (
+          <div key={`table-${partIndex}`} className="rich-table-wrap">
+            <table className="rich-table">
+              <tbody>
+                {rows.map((row, rowIndex) => {
+                  const cells = row
+                    .split('|')
+                    .filter(Boolean)
+                    .map((cell) => cell.trim())
+
+                  return (
+                    <tr key={rowIndex}>
+                      {cells.map((cell, cellIndex) => (
+                        <td key={cellIndex}>{cell}</td>
+                      ))}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
+    }
+
+    return part.split('\n').map((line, lineIndex) => {
+      const key = `${partIndex}-${lineIndex}`
+
+      if (!line.trim()) {
+        return <div key={key} className="preview-markdown-gap" aria-hidden="true" />
+      }
+
+      const headingMatch = line.match(/^(#{1,6})\s+(.*)$/)
+
+      if (headingMatch) {
+        const level = Math.min(4, headingMatch[1].length)
+
+        return (
+          <h4 key={key} className={`preview-markdown-heading is-level-${level}`}>
+            {renderMarkdownInline(headingMatch[2])}
+          </h4>
+        )
+      }
+
+      if (/^[-*]\s/.test(line)) {
+        return (
+          <div key={key} className="rich-list-row">
+            <span className="rich-list-marker">&#8226;</span>
+            <span>{renderMarkdownInline(line.replace(/^[-*]\s/, ''))}</span>
+          </div>
+        )
+      }
+
+      if (/^\d+\.\s/.test(line)) {
+        const number = line.match(/^(\d+)\./)?.[1] ?? ''
+
+        return (
+          <div key={key} className="rich-list-row">
+            <span className="rich-list-marker">{number}.</span>
+            <span>{renderMarkdownInline(line.replace(/^\d+\.\s/, ''))}</span>
+          </div>
+        )
+      }
+
+      return (
+        <p key={key} className="preview-markdown-paragraph">
+          {renderMarkdownInline(line)}
+        </p>
+      )
+    })
+  })
 }
 
 const PreviewValue = ({ label, value }) => (
@@ -417,9 +554,47 @@ const PresentationPreview = ({
   )
 }
 
+const MarkdownPreview = ({ copy, markdownState }) => {
+  if (markdownState.status !== 'ready') {
+    return (
+      <AsyncPreviewState
+        copy={copy}
+        state={markdownState}
+        emptyMessage={copy.previewInlineUnavailable}
+      />
+    )
+  }
+
+  if (!markdownState.text.trim()) {
+    return (
+      <AsyncPreviewState
+        copy={copy}
+        state={markdownState}
+        emptyMessage={copy.previewMarkdownEmpty}
+      />
+    )
+  }
+
+  return (
+    <div className="preview-markdown">
+      <div className="preview-document-stats" aria-hidden="true">
+        <span>{copy.previewLinesLabel}: {markdownState.lineCount}</span>
+        <span>{copy.previewWordsLabel}: {markdownState.wordCount}</span>
+      </div>
+
+      <div className="preview-document-shell">
+        <article className="preview-markdown-body">
+          {renderMarkdown(markdownState.text)}
+        </article>
+      </div>
+    </div>
+  )
+}
+
 export default function FilePreviewPanel({ file, onClose, text = defaultPreviewText }) {
   const copy = { ...defaultPreviewText, ...text }
   const [activeTab, setActiveTab] = useState('preview')
+  const [markdownState, setMarkdownState] = useState(createInitialMarkdownState)
   const [spreadsheetState, setSpreadsheetState] = useState(createInitialSpreadsheetState)
   const [documentState, setDocumentState] = useState(createInitialDocumentState)
   const [presentationState, setPresentationState] = useState(createInitialPresentationState)
@@ -432,12 +607,65 @@ export default function FilePreviewPanel({ file, onClose, text = defaultPreviewT
 
   useEffect(() => {
     setActiveTab('preview')
+    setMarkdownState(createInitialMarkdownState())
     setSpreadsheetState(createInitialSpreadsheetState())
     setDocumentState(createInitialDocumentState())
     setPresentationState(createInitialPresentationState())
     setActiveSheetName('')
     setActiveSlideId('')
   }, [file?.downloadUrl, file?.name])
+
+  useEffect(() => {
+    if (previewKind !== 'markdown' || !file?.downloadUrl) {
+      return undefined
+    }
+
+    const controller = new AbortController()
+    let isActive = true
+
+    setMarkdownState({
+      status: 'loading',
+      text: '',
+      lineCount: 0,
+      wordCount: 0,
+      error: '',
+    })
+
+    void (async () => {
+      try {
+        const textContent = await loadTextFile(file.downloadUrl, controller.signal)
+
+        if (!isActive) {
+          return
+        }
+
+        setMarkdownState({
+          status: 'ready',
+          text: textContent,
+          lineCount: textContent ? textContent.split(/\r?\n/).length : 0,
+          wordCount: countWords(textContent),
+          error: '',
+        })
+      } catch (error) {
+        if (!isActive || error?.name === 'AbortError') {
+          return
+        }
+
+        setMarkdownState({
+          status: 'error',
+          text: '',
+          lineCount: 0,
+          wordCount: 0,
+          error: error?.message ?? '',
+        })
+      }
+    })()
+
+    return () => {
+      isActive = false
+      controller.abort()
+    }
+  }, [file?.downloadUrl, previewKind])
 
   useEffect(() => {
     if (previewKind !== 'spreadsheet' || !file?.downloadUrl) {
@@ -633,6 +861,19 @@ export default function FilePreviewPanel({ file, onClose, text = defaultPreviewT
     })
   }
 
+  if (previewKind === 'markdown' && markdownState.lineCount > 0) {
+    details.push(
+      {
+        label: copy.previewLinesLabel,
+        value: `${markdownState.lineCount}`,
+      },
+      {
+        label: copy.previewWordsLabel,
+        value: `${markdownState.wordCount}`,
+      },
+    )
+  }
+
   if (previewKind === 'document' && documentState.paragraphCount > 0) {
     details.push(
       {
@@ -746,6 +987,8 @@ export default function FilePreviewPanel({ file, onClose, text = defaultPreviewT
               activeSheetName={activeSheetName}
               onSelectSheet={setActiveSheetName}
             />
+          ) : previewKind === 'markdown' ? (
+            <MarkdownPreview copy={copy} markdownState={markdownState} />
           ) : previewKind === 'document' && canPreviewDocument ? (
             <DocumentPreview copy={copy} documentState={documentState} />
           ) : previewKind === 'presentation' && canPreviewPresentation ? (

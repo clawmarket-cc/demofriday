@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import MessageBubble from './MessageBubble'
-import { isAwaitingVisibleAgentResult } from '../utils/chatFlow'
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 const MAX_FILE_SIZE_LABEL = '25 MB'
-const ACCEPTED_FILES = '.pdf,.xls,.xlsx,.doc,.docx,.ppt,.pptx'
-const ACCEPTED_EXTENSIONS = new Set(['pdf', 'xls', 'xlsx', 'doc', 'docx', 'ppt', 'pptx'])
+const ACCEPTED_FILES = '.pdf,.xls,.xlsx,.doc,.docx,.ppt,.pptx,.md,.markdown'
+const ACCEPTED_EXTENSIONS = new Set(['pdf', 'xls', 'xlsx', 'doc', 'docx', 'ppt', 'pptx', 'md', 'markdown'])
 const ACCEPTED_MIME_TYPES = new Set([
   'application/pdf',
   'application/vnd.ms-excel',
@@ -14,6 +13,8 @@ const ACCEPTED_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/markdown',
+  'text/x-markdown',
 ])
 
 const defaultChatText = {
@@ -37,7 +38,7 @@ const defaultChatText = {
   completedWithFilesStatus: 'Completed with files',
   errorStatus: 'Run failed',
   fileTooLarge: 'File is too large. Maximum size is {maxSize}.',
-  fileTypeError: 'Unsupported file type. Upload PDF, Excel, Word, or PowerPoint files.',
+  fileTypeError: 'Unsupported file type. Upload PDF, Excel, Word, PowerPoint, or Markdown files.',
   removeAttachmentAria: 'Remove attachment',
 }
 
@@ -76,6 +77,7 @@ export default function ChatPanel({
   onClearHistory,
   onPreviewFile,
   isSending = false,
+  isClearing = false,
   runStatus = null,
   text = defaultChatText,
   statusLabels = defaultStatusLabels,
@@ -214,14 +216,22 @@ export default function ChatPanel({
   }
 
   const hasMessages = messages.length > 0
-  const activeRunStatus = isAwaitingVisibleAgentResult({ messages, isSending, runStatus })
-    ? runStatus
-    : null
+  const activeRunStatus =
+    runStatus?.pending
+      ? runStatus
+      : isSending
+        ? {
+            ...(runStatus ?? {}),
+            pending: true,
+            state: runStatus?.state || 'running',
+            label: runStatus?.label || copy.runningStatus,
+          }
+        : null
   const isTyping = Boolean(activeRunStatus)
   const { color: statusColor, label: statusLabel } = getStatusMeta(agent.status, labels)
   const hints = Array.isArray(agent.hints) && agent.hints.length > 0 ? agent.hints : copy.hints
-  const canSend = Boolean(input.trim() || selectedFile) && !isSending && !activeRunStatus
-  const canClearHistory = hasMessages && !isSending && !activeRunStatus
+  const canSend = Boolean(input.trim() || selectedFile) && !isSending && !isClearing && !activeRunStatus
+  const canClearHistory = hasMessages && !isSending && !isClearing && !activeRunStatus
   const runningStatusCycle =
     Array.isArray(copy.runningStatusCycle) && copy.runningStatusCycle.length > 0
       ? copy.runningStatusCycle

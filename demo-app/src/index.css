@@ -604,6 +604,7 @@ body {
 }
 
 .preview-frame-shell,
+.preview-markdown,
 .preview-spreadsheet,
 .preview-document,
 .preview-presentation,
@@ -747,6 +748,7 @@ body {
 }
 
 .preview-document,
+.preview-markdown,
 .preview-presentation {
   display: flex;
   flex-direction: column;
@@ -778,6 +780,7 @@ body {
 }
 
 .preview-document-body,
+.preview-markdown-body,
 .preview-slide-card {
   max-width: 38rem;
   margin: 0 auto;
@@ -787,6 +790,45 @@ body {
 .preview-document-body {
   display: grid;
   gap: 0.95rem;
+}
+
+.preview-markdown-body {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.preview-markdown-heading,
+.preview-markdown-paragraph {
+  margin: 0;
+}
+
+.preview-markdown-heading {
+  font-family: 'Playfair Display', Georgia, serif;
+  line-height: 1.28;
+  color: #2d2418;
+}
+
+.preview-markdown-heading.is-level-1 {
+  font-size: 1.18rem;
+}
+
+.preview-markdown-heading.is-level-2 {
+  font-size: 1.02rem;
+}
+
+.preview-markdown-heading.is-level-3,
+.preview-markdown-heading.is-level-4 {
+  font-size: 0.9rem;
+}
+
+.preview-markdown-paragraph {
+  font-size: 0.82rem;
+  line-height: 1.7;
+  color: #3f3427;
+}
+
+.preview-markdown-gap {
+  height: 0.35rem;
 }
 
 .preview-document-heading {
